@@ -371,18 +371,19 @@ function parseSheet(json){
   return rows.slice(1).map(r=>Object.fromEntries(h.map((k,i)=>[k,(r[i]||"").trim()])));
 }
 // ── Google Sheets (fase 2 — conectado) ─────────────────────────────────────
-// Planilha: https://docs.google.com/spreadsheets/d/1E0_yAlDYpviQUARoK-_jUbEYF9T1U0q2-I5QI6pDYvI/edit
+// Planilha: https://docs.google.com/spreadsheets/d/1CFKK6mGGhSlMWg5pAMarJWx5v34TauY7KciSzXFIRmY/edit
 // A planilha precisa estar compartilhada como "Qualquer pessoa com o link → Leitor"
 // para o endpoint público de exportação CSV (gviz) funcionar sem autenticação.
-const SHEET_ID        = "1E0_yAlDYpviQUARoK-_jUbEYF9T1U0q2-I5QI6pDYvI";
-const SHEET_META      = "Base Meta";
-const SHEET_TRAFEGO   = "Tráfego - soKDPo4w";
-const SHEET_DISPAROS  = "Disparos - p1wJVpVm";  // orgânico (disparos) — somado com SHEET_ORGANICO
-const SHEET_ORGANICO  = "Orgânico - cgII05sH";  // orgânico — somado com SHEET_DISPAROS
+// Busca por gid (id numérico da aba) em vez de nome — imune a diferenças de texto/acento.
+const SHEET_ID        = "1CFKK6mGGhSlMWg5pAMarJWx5v34TauY7KciSzXFIRmY";
+const GID_META        = "750131701";  // Base Meta
+const GID_TRAFEGO     = "559968900";  // Tráfego - soKDPo4w
+const GID_DISPAROS    = "0";          // Disparos - p1wJVpVm (orgânico) — somado com GID_ORGANICO
+const GID_ORGANICO    = "1383889347"; // Orgânico - cgII05sH — somado com GID_DISPAROS
 // SHEET_VENDAS: ainda sem acesso à planilha de vendas — aba "Vendas" fica zerada (sem fetch).
 
-async function fetchSheet(name){
-  const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`;
+async function fetchSheet(label,gid){
+  const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${gid}`;
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(),20000); // 20s timeout
   let res;
@@ -390,14 +391,14 @@ async function fetchSheet(name){
     res=await fetch(url,{cache:"no-cache",signal:ctrl.signal});
   }catch(fetchErr){
     clearTimeout(timer);
-    if(fetchErr.name==="AbortError") throw new Error(`Timeout ao buscar "${name}" — planilha demorou mais de 20s`);
-    throw new Error(`Falha de rede ao buscar "${name}": ${fetchErr.message}`);
+    if(fetchErr.name==="AbortError") throw new Error(`Timeout ao buscar "${label}" — planilha demorou mais de 20s`);
+    throw new Error(`Falha de rede ao buscar "${label}": ${fetchErr.message}`);
   }
   clearTimeout(timer);
-  if(!res.ok) throw new Error(`Erro ${res.status} ao buscar "${name}" — verifique se a planilha está compartilhada como "qualquer pessoa com o link pode ver"`);
+  if(!res.ok) throw new Error(`Erro ${res.status} ao buscar "${label}" — verifique se a planilha está compartilhada como "qualquer pessoa com o link pode ver"`);
   const text=await res.text();
-  if(!text||text.trim().length<3) throw new Error(`Resposta vazia para "${name}"`);
-  console.log(`[sheets] "${name}" OK — ${text.length} chars`);
+  if(!text||text.trim().length<3) throw new Error(`Resposta vazia para "${label}"`);
+  console.log(`[sheets] "${label}" OK — ${text.length} chars`);
   return parseCSVText(text);
 }
 
@@ -406,10 +407,10 @@ async function loadData(){
   S.loading=true; S.error=null; render();
   try{
     const [metaJ, trafJ, dispJ, orgJ] = await Promise.all([
-      fetchSheet(SHEET_META),
-      fetchSheet(SHEET_TRAFEGO),
-      fetchSheet(SHEET_DISPAROS),
-      fetchSheet(SHEET_ORGANICO),
+      fetchSheet("Base Meta",GID_META),
+      fetchSheet("Tráfego",GID_TRAFEGO),
+      fetchSheet("Disparos",GID_DISPAROS),
+      fetchSheet("Orgânico",GID_ORGANICO),
     ]);
     const metaRowsRaw = parseSheet(metaJ);
     const trafRows    = parseSheet(trafJ);
