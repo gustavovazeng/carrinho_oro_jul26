@@ -1159,6 +1159,7 @@ function renderVendas(){
   const convLeadsFichas = LISTA_LEADS_TOTAL>0 ? (totalFichasAllTime/LISTA_LEADS_TOTAL)*100 : 0;
   const convFichas      = totalFichasAllTime>0 ? (S.vendasTotal/totalFichasAllTime)*100 : 0;
   const faturamento     = S.vendasFaturamento;
+  const ticketMedio     = S.vendasTotal>0 ? faturamento/S.vendasTotal : 0;
   const spendAllTime    = Object.values(S.meta).reduce((a,m)=>a+(m.spend||0),0);
   const investimentoRoas= spendAllTime+INVESTIMENTO_ROAS_EXTRA;
   const roas            = investimentoRoas>0 ? faturamento/investimentoRoas : 0;
@@ -1181,15 +1182,8 @@ function renderVendas(){
       ${kpiCard("Conversão lista em vendas",fPct(convLista),`${S.vendasTotal} / ${LISTA_LEADS_TOTAL.toLocaleString("pt-BR")} leads`,"var(--text-strong)")}
       ${kpiCard("Conversão leads em fichas",fPct(convLeadsFichas),`${totalFichasAllTime.toLocaleString("pt-BR")} / ${LISTA_LEADS_TOTAL.toLocaleString("pt-BR")} leads`,"var(--text-strong)")}
       ${kpiCard("Conversão fichas em vendas",fPct(convFichas),`${S.vendasTotal} / ${totalFichasAllTime.toLocaleString("pt-BR")} fichas`,"var(--text-strong)")}
-      ${kpiCard("Faturamento",fBRL(faturamento),`soma do valor de ${S.vendasTotal} vendas`,"var(--text-strong)")}
+      ${kpiCard("Faturamento",fBRL(faturamento),`ticket médio: ${fBRL(ticketMedio)}`,"var(--text-strong)")}
       ${kpiCard("ROAS",roas.toFixed(2).replace(".",",")+"x",`${fBRL(faturamento)} / ${fBRL(investimentoRoas)}`,"var(--text-strong)")}
-    </div>
-    <div class="cc" style="position:relative;margin-bottom:12px">
-      <div class="ch">
-        <span class="ct">Conversão de fichas em vendas por dia</span>
-        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_INV}"></span>Conversão/dia</span></div>
-      </div>
-      <div style="position:relative"><canvas id="c-conv"></canvas><div class="tip" id="t-conv"></div></div>
     </div>
     <div class="cc" style="position:relative;margin-bottom:12px">
       <div class="ch">
@@ -1198,12 +1192,19 @@ function renderVendas(){
       </div>
       <div style="position:relative"><canvas id="c-vendas-traf"></canvas><div class="tip" id="t-vendas-traf"></div></div>
     </div>
-    <div class="cc" style="position:relative">
+    <div class="cc" style="position:relative;margin-bottom:12px">
       <div class="ch">
         <span class="ct">Quantidade de vendas — Orgânico (por dia)</span>
         <div class="lg"><span class="li"><span class="ld" style="background:${CHART_ORG}"></span>Vendas/dia</span></div>
       </div>
       <div style="position:relative"><canvas id="c-vendas-org"></canvas><div class="tip" id="t-vendas-org"></div></div>
+    </div>
+    <div class="cc" style="position:relative">
+      <div class="ch">
+        <span class="ct">Conversão de fichas em vendas por dia</span>
+        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_INV}"></span>Conversão/dia</span></div>
+      </div>
+      <div style="position:relative"><canvas id="c-conv"></canvas><div class="tip" id="t-conv"></div></div>
     </div>
     ${daily.length===0?`<div class="err" style="margin-top:12px">Nenhum dado no período selecionado.</div>`:""}
     <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
