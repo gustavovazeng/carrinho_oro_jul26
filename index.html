@@ -1136,8 +1136,10 @@ function getDailyConversao(start,end){
   const allDates=new Set([...Object.keys(S.trafego),...Object.keys(S.organico)]);
   return Array.from(allDates).sort().filter(d=>d>=start&&d<=end).map(date=>{
     const fichasDay=(S.trafego[date]||0)+(S.organico[date]||0);
-    const vendasDay=(S.vendasTraf[date]||0)+(S.vendasOrg[date]||0);
-    return {date,label:fDate(date),fichasDay,vendasDay,conv:fichasDay>0?(vendasDay/fichasDay)*100:0};
+    const vendasTraf=S.vendasTraf[date]||0;
+    const vendasOrg=S.vendasOrg[date]||0;
+    const vendasDay=vendasTraf+vendasOrg;
+    return {date,label:fDate(date),fichasDay,vendasDay,vendasTraf,vendasOrg,conv:fichasDay>0?(vendasDay/fichasDay)*100:0};
   });
 }
 function periodVendas(start,end){
@@ -1182,12 +1184,26 @@ function renderVendas(){
       ${kpiCard("Faturamento",fBRL(faturamento),`soma do valor de ${S.vendasTotal} vendas`,"var(--text-strong)")}
       ${kpiCard("ROAS",roas.toFixed(2).replace(".",",")+"x",`${fBRL(faturamento)} / ${fBRL(investimentoRoas)}`,"var(--text-strong)")}
     </div>
-    <div class="cc" style="position:relative">
+    <div class="cc" style="position:relative;margin-bottom:12px">
       <div class="ch">
         <span class="ct">Conversão de fichas em vendas por dia</span>
         <div class="lg"><span class="li"><span class="ld" style="background:${CHART_INV}"></span>Conversão/dia</span></div>
       </div>
       <div style="position:relative"><canvas id="c-conv"></canvas><div class="tip" id="t-conv"></div></div>
+    </div>
+    <div class="cc" style="position:relative;margin-bottom:12px">
+      <div class="ch">
+        <span class="ct">Quantidade de vendas — Tráfego (por dia)</span>
+        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Vendas/dia</span></div>
+      </div>
+      <div style="position:relative"><canvas id="c-vendas-traf"></canvas><div class="tip" id="t-vendas-traf"></div></div>
+    </div>
+    <div class="cc" style="position:relative">
+      <div class="ch">
+        <span class="ct">Quantidade de vendas — Orgânico (por dia)</span>
+        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_ORG}"></span>Vendas/dia</span></div>
+      </div>
+      <div style="position:relative"><canvas id="c-vendas-org"></canvas><div class="tip" id="t-vendas-org"></div></div>
     </div>
     ${daily.length===0?`<div class="err" style="margin-top:12px">Nenhum dado no período selecionado.</div>`:""}
     <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
@@ -1198,6 +1214,12 @@ function renderVendas(){
       {name:"Conversão",color:CHART_INV,key:"conv",fmt:v=>v.toFixed(2).replace(".",",")+"%"},
       {name:"Vendas",color:CHART_TRAF,key:"vendasDay",fmt:v=>String(v)},
       {name:"Fichas",color:CHART_ORG,key:"fichasDay",fmt:v=>String(v)}],44,12);
+    const box2=document.getElementById("c-vendas-traf")?.parentElement;
+    if(box2)drawBarSingle("c-vendas-traf",daily,"vendasTraf",CHART_TRAF,box2.clientWidth,200);
+    const box3=document.getElementById("c-vendas-org")?.parentElement;
+    if(box3)drawBarSingle("c-vendas-org",daily,"vendasOrg",CHART_ORG,box3.clientWidth,200);
+    setupTip("c-vendas-traf","t-vendas-traf",daily,[{name:"Vendas tráfego",color:CHART_TRAF,key:"vendasTraf",fmt:v=>String(v)}],40,12);
+    setupTip("c-vendas-org","t-vendas-org",daily,[{name:"Vendas orgânico",color:CHART_ORG,key:"vendasOrg",fmt:v=>String(v)}],40,12);
   });
 }
 
