@@ -457,8 +457,10 @@ async function loadData(){
     }
 
     // ── Casar fichas de tráfego → anúncio/campanha ──
-    // Padrão de UTM do Meta Ads: utm_medium = "{nome campanha}id{campaign_id}"
-    //                            utm_content = "{nome anúncio}id{ad_id}"
+    // Padrão de UTM usado no oro_jul26: utm_medium = "{nome campanha}_id_{campaign_id}"
+    //                                    utm_content = "{nome anúncio}_id_{ad_id}"
+    // (o "_id_" separado por underscore — diferente do padrão "id" colado usado no OFRR —
+    // por isso o regex aceita o underscore opcional dos dois lados)
     // Prioridade: resolver pelo Ad ID batido na Base Meta (fonte da verdade — cobre o
     // caso do mesmo anúncio existir em campanhas diferentes com Ad IDs diferentes).
     // Se o Ad ID ainda não apareceu na Base Meta, cai no nome cru extraído da UTM.
@@ -467,11 +469,11 @@ async function loadData(){
       const d=toISOFicha(r["Submitted At"]);if(!d)continue;
       const utmMed=(r["utm_medium"]||"").trim();
       const utmCont=(r["utm_content"]||r["utm_term"]||"").trim();
-      const adIdMatch=utmCont.match(/id(\d{10,})$/);
+      const adIdMatch=utmCont.match(/_?id_?(\d{10,})$/);
       const rawAdId=adIdMatch?adIdMatch[1]:null;
-      const adNameMatch=utmCont.match(/^(.+?)id\d{10,}$/);
+      const adNameMatch=utmCont.match(/^(.+?)_?id_?\d{10,}$/);
       const rawAdName=adNameMatch?adNameMatch[1]:(utmCont||null);
-      const campMatch=utmMed.match(/^(.+?)id\d+$/);
+      const campMatch=utmMed.match(/^(.+?)_?id_?\d+$/);
       const rawCampName=campMatch?campMatch[1]:(utmMed||null);
 
       let adName=rawAdName, campName=rawCampName;
