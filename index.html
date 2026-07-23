@@ -217,9 +217,9 @@ const METAS_RESUMO = {
 };
 
 // ── Constantes fixas usadas nas métricas da aba Vendas ─────────────────────
-const LISTA_LEADS_TOTAL   = 7040;   // tamanho da lista de leads considerada
-const TICKET_MEDIO        = 2480;   // R$ por venda, usado no faturamento
-const INVESTIMENTO_ROAS   = 35436;  // R$ investido considerado no cálculo do ROAS
+const LISTA_LEADS_TOTAL       = 209896;    // tamanho da lista de leads deste lançamento
+const INVESTIMENTO_ROAS_EXTRA = 1538338.58; // custo fixo somado ao investimento em mídia p/ ROAS
+// Faturamento agora usa o valor real de cada venda (coluna "Valor"), não um ticket médio fixo.
 
 // Chart colors
 const CHART_INV  = "#3b82f6";
@@ -237,7 +237,7 @@ const S = {
   organico:{},           // date → count (fichas orgânico)
   vendasTraf:{},         // date → count (vendas casadas com fichas de tráfego)
   vendasOrg:{},          // date → count (vendas casadas com fichas de orgânico)
-  vendasTotal:0, vendasUnmatched:0,
+  vendasTotal:0, vendasUnmatched:0, vendasFaturamento:0,
   startDate:"", endDate:"", activeQuick:"30d",
   currentPage:"principal",
   updated:null,
@@ -380,7 +380,7 @@ const GID_META        = "750131701";  // Base Meta
 const GID_TRAFEGO     = "559968900";  // Tráfego - soKDPo4w
 const GID_DISPAROS    = "0";          // Disparos - p1wJVpVm (orgânico) — somado com GID_ORGANICO
 const GID_ORGANICO    = "1383889347"; // Orgânico - cgII05sH — somado com GID_DISPAROS
-// SHEET_VENDAS: ainda sem acesso à planilha de vendas — aba "Vendas" fica zerada (sem fetch).
+const GID_VENDAS      = "1103672963"; // Base Vendas
 
 async function fetchSheet(label,gid){
   const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${gid}`;
@@ -406,17 +406,18 @@ async function fetchSheet(label,gid){
 async function loadData(){
   S.loading=true; S.error=null; render();
   try{
-    const [metaJ, trafJ, dispJ, orgJ] = await Promise.all([
+    const [metaJ, trafJ, dispJ, orgJ, vendasJ] = await Promise.all([
       fetchSheet("Base Meta",GID_META),
       fetchSheet("Tráfego",GID_TRAFEGO),
       fetchSheet("Disparos",GID_DISPAROS),
       fetchSheet("Orgânico",GID_ORGANICO),
+      GID_VENDAS!=null ? fetchSheet("Vendas",GID_VENDAS) : Promise.resolve(null),
     ]);
     const metaRowsRaw = parseSheet(metaJ);
     const trafRows    = parseSheet(trafJ);
     // Disparos + Orgânico somados numa única categoria "orgânico"
     const orgRows     = [...parseSheet(dispJ), ...parseSheet(orgJ)];
-    const vendasRows  = []; // sem acesso à planilha de vendas ainda — aba fica zerada
+    const vendasRows  = vendasJ ? parseSheet(vendasJ) : []; // zerado até termos o gid da aba de vendas
 
     // ── Fichas: Tráfego (data já ajustada -3h) ──
     const trafD={};
@@ -491,11 +492,16 @@ async function loadData(){
     // venda (em qualquer uma das duas abas), pega a de "Submitted At" mais antigo e
     // usa a origem dela. Isso cobre o caso de alguém preencher no orgânico e depois
     // preencher de novo vindo do tráfego: a venda continua sendo do orgânico.
+    // A "Base Vendas" não tem data própria — a data usada é a da ficha casada
+    // (primeira preenchida). Sem match nenhum → cai em "origem não identificada"
+    // (não entra em nenhum bucket de data, então fica de fora dos gráficos/filtros
+    // de período, mas conta no total de vendas e no faturamento).
     const earliestByPhone={}, earliestByEmail={};
     function noteFicha(type,phone,email,ms){
       if(ms==null)return;
-      if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]={type,ms};
-      if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]={type,ms};
+      const iso=msToISO(ms-3*60*60*1000); // mesmo ajuste de fuso usado nas fichas (toISOFicha)
+      if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]={type,ms,iso};
+      if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]={type,ms,iso};
     }
     for(const r of trafRows){
       noteFicha("traf",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]));
@@ -504,20 +510,22 @@ async function loadData(){
       noteFicha("org",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]));
     }
     const vTrafD={}, vOrgD={};
-    let vTotal=0, vUnmatched=0;
+    let vTotal=0, vUnmatched=0, vFaturamento=0;
     for(const r of vendasRows){
-      const d=toISOVenda(r["Data Correta"]);if(!d)continue;
-      const ph=normalizePhone(r["Whatsapp1"]);
+      const nome=(r["Nome"]||"").trim();
+      const ph=normalizePhone(r["Telefone"]);
       const em=normalizeEmail(r["Email"]);
+      if(!nome&&!ph&&!em)continue; // linha vazia
       vTotal++;
+      vFaturamento+=parseBRL(r["Valor"]);
       const candidates=[];
       if(ph&&earliestByPhone[ph])candidates.push(earliestByPhone[ph]);
       if(em&&earliestByEmail[em])candidates.push(earliestByEmail[em]);
       if(candidates.length){
         candidates.sort((a,b)=>a.ms-b.ms);
-        const bucket=candidates[0].type;
-        if(bucket==="traf")vTrafD[d]=(vTrafD[d]||0)+1;
-        else vOrgD[d]=(vOrgD[d]||0)+1;
+        const best=candidates[0];
+        if(best.type==="traf")vTrafD[best.iso]=(vTrafD[best.iso]||0)+1;
+        else vOrgD[best.iso]=(vOrgD[best.iso]||0)+1;
       }else{
         vUnmatched++;
       }
@@ -525,7 +533,7 @@ async function loadData(){
 
     S.trafego=trafD; S.organico=orgD;
     S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib;
-    S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched;
+    S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched; S.vendasFaturamento=vFaturamento;
 
     const allDates=[...new Set([...Object.keys(mD),...Object.keys(trafD),...Object.keys(orgD)])].sort();
     S.updated=allDates.length?fDateBR(allDates[allDates.length-1]):"—";
@@ -803,6 +811,37 @@ function drawBarSingle(id,data,key,color,cssW,cssH){
     if(v>0&&(n<=30||i%step===0)){
       ctx.fillStyle="#e8edf6";ctx.font=`bold ${Math.min(10,Math.max(7,barW))}px 'DM Mono',monospace`;
       ctx.fillText(v,xP(i),yP(v)-4);
+    }
+  });
+  ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";
+  data.forEach((d,i)=>{if(i%step===0)ctx.fillText(d.label,xP(i),P.t+cH+18);});
+}
+// Igual a drawBarSingle, mas formata os valores como percentual (usado na conversão de fichas em vendas/dia)
+function drawBarPct(id,data,key,color,cssW,cssH){
+  const ctx=initCanvas(id,cssW,cssH);if(!ctx)return;
+  const P={t:14,r:12,b:28,l:46};
+  const cW=cssW-P.l-P.r,cH=cssH-P.t-P.b;
+  const vals=data.map(d=>d[key]||0);
+  const maxV=Math.max(...vals,1)*1.15;
+  const n=data.length;
+  const barW=Math.max(4,Math.min(18,(cW/Math.max(n,1))*0.7));
+  const xP=i=>P.l+(n>1?i/(n-1):0.5)*cW;
+  const yP=v=>P.t+cH-(v/maxV)*cH;
+  ctx.setLineDash([]);
+  for(let i=0;i<=4;i++){
+    const y=P.t+(i/4)*cH;
+    ctx.strokeStyle=GRID_C;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(P.l+cW,y);ctx.stroke();
+    ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="right";
+    ctx.fillText((maxV-(i/4)*maxV).toFixed(1)+"%",P.l-4,y+3);
+  }
+  drawBars(ctx,xP,yP,P.t+cH,vals,color,barW);
+  const step=n>60?7:n>30?3:n>14?2:1;
+  ctx.textAlign="center";
+  vals.forEach((v,i)=>{
+    if(v>0&&(n<=30||i%step===0)){
+      ctx.fillStyle="#e8edf6";ctx.font=`bold ${Math.min(10,Math.max(7,barW))}px 'DM Mono',monospace`;
+      ctx.fillText(v.toFixed(1)+"%",xP(i),yP(v)-4);
     }
   });
   ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";
@@ -1090,32 +1129,43 @@ function renderAnuncios(){
 }
 
 // ── Render: Vendas ─────────────────────────────────────────────────────────
-function getDailyVendas(start,end){
-  const allDates=new Set([...Object.keys(S.vendasTraf),...Object.keys(S.vendasOrg)]);
-  return Array.from(allDates).sort().filter(d=>d>=start&&d<=end).map(date=>({
-    date,label:fDate(date),
-    vendasTraf:S.vendasTraf[date]||0,
-    vendasOrg:S.vendasOrg[date]||0,
-  }));
+// Vendas por dia = soma de vendasTraf+vendasOrg naquela data (data da ficha casada).
+// Conversão diária = vendas do dia / fichas do dia (tráfego+orgânico) — não identificadas
+// ficam de fora (não têm data).
+function getDailyConversao(start,end){
+  const allDates=new Set([...Object.keys(S.trafego),...Object.keys(S.organico)]);
+  return Array.from(allDates).sort().filter(d=>d>=start&&d<=end).map(date=>{
+    const fichasDay=(S.trafego[date]||0)+(S.organico[date]||0);
+    const vendasDay=(S.vendasTraf[date]||0)+(S.vendasOrg[date]||0);
+    return {date,label:fDate(date),fichasDay,vendasDay,conv:fichasDay>0?(vendasDay/fichasDay)*100:0};
+  });
+}
+function periodVendas(start,end){
+  let traf=0,org=0;
+  for(const d in S.vendasTraf) if(d>=start&&d<=end) traf+=S.vendasTraf[d];
+  for(const d in S.vendasOrg) if(d>=start&&d<=end) org+=S.vendasOrg[d];
+  return {traf,org};
 }
 function renderVendas(){
   const el=document.getElementById("page-vendas");if(!el)return;
-  const daily=getDailyVendas(S.startDate,S.endDate);
-  const totTraf=daily.reduce((a,d)=>a+d.vendasTraf,0);
-  const totOrg=daily.reduce((a,d)=>a+d.vendasOrg,0);
+  const daily=getDailyConversao(S.startDate,S.endDate);
+  const {traf:totTraf,org:totOrg}=periodVendas(S.startDate,S.endDate);
 
-  // Métricas de conversão/faturamento — sempre sobre o total de vendas (todo o período)
+  // Métricas de conversão/faturamento/ROAS — sempre sobre o total (todo o período/histórico)
   const totalFichasAllTime=Object.values(S.trafego).reduce((a,b)=>a+b,0)+Object.values(S.organico).reduce((a,b)=>a+b,0);
-  const convLista  = LISTA_LEADS_TOTAL>0 ? (S.vendasTotal/LISTA_LEADS_TOTAL)*100 : 0;
-  const convFichas = totalFichasAllTime>0 ? (S.vendasTotal/totalFichasAllTime)*100 : 0;
-  const faturamento= S.vendasTotal*TICKET_MEDIO;
-  const roas       = INVESTIMENTO_ROAS>0 ? faturamento/INVESTIMENTO_ROAS : 0;
+  const convLista       = LISTA_LEADS_TOTAL>0 ? (S.vendasTotal/LISTA_LEADS_TOTAL)*100 : 0;
+  const convLeadsFichas = LISTA_LEADS_TOTAL>0 ? (totalFichasAllTime/LISTA_LEADS_TOTAL)*100 : 0;
+  const convFichas      = totalFichasAllTime>0 ? (S.vendasTotal/totalFichasAllTime)*100 : 0;
+  const faturamento     = S.vendasFaturamento;
+  const spendAllTime    = Object.values(S.meta).reduce((a,m)=>a+(m.spend||0),0);
+  const investimentoRoas= spendAllTime+INVESTIMENTO_ROAS_EXTRA;
+  const roas            = investimentoRoas>0 ? faturamento/investimentoRoas : 0;
 
   el.innerHTML=`
     <div class="hdr" style="margin-bottom:6px">
       <div>
         <div class="hdr-title">Vendas</div>
-        <div class="hdr-sub">atualizado em: ${S.updated||"—"}${daily.length>0?` · ${daily.length} dias no período`:""} · atribuição por e-mail/telefone da ficha</div>
+        <div class="hdr-sub">atualizado em: ${S.updated||"—"}${daily.length>0?` · ${daily.length} dias no período`:""} · atribuição por e-mail/telefone da primeira ficha preenchida</div>
       </div>
     </div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
@@ -1123,37 +1173,31 @@ function renderVendas(){
       ${kpiCard("Vendas (total)",S.vendasTotal.toLocaleString("pt-BR"),"todo o período","var(--text-strong)")}
       ${kpiCard("Vendas tráfego",totTraf.toLocaleString("pt-BR"),"no período selecionado","var(--text-strong)")}
       ${kpiCard("Vendas orgânico",totOrg.toLocaleString("pt-BR"),"no período selecionado","var(--text-strong)")}
-      ${kpiCard("Não identificadas",S.vendasUnmatched.toLocaleString("pt-BR"),"sem ficha correspondente","var(--muted)")}
+      ${kpiCard("Origem não identificada",S.vendasUnmatched.toLocaleString("pt-BR"),"sem ficha correspondente · todo o período","var(--muted)")}
     </div>
-    <div class="g4" style="margin-bottom:16px">
+    <div class="g5" style="margin-bottom:16px">
       ${kpiCard("Conversão lista em vendas",fPct(convLista),`${S.vendasTotal} / ${LISTA_LEADS_TOTAL.toLocaleString("pt-BR")} leads`,"var(--text-strong)")}
+      ${kpiCard("Conversão leads em fichas",fPct(convLeadsFichas),`${totalFichasAllTime.toLocaleString("pt-BR")} / ${LISTA_LEADS_TOTAL.toLocaleString("pt-BR")} leads`,"var(--text-strong)")}
       ${kpiCard("Conversão fichas em vendas",fPct(convFichas),`${S.vendasTotal} / ${totalFichasAllTime.toLocaleString("pt-BR")} fichas`,"var(--text-strong)")}
-      ${kpiCard("Faturamento",fBRL(faturamento),`${S.vendasTotal} × ${fBRL(TICKET_MEDIO)}`,"var(--text-strong)")}
-      ${kpiCard("ROAS",roas.toFixed(2).replace(".",",")+"x",`${fBRL(faturamento)} / ${fBRL(INVESTIMENTO_ROAS)}`,"var(--text-strong)")}
-    </div>
-    <div class="cc" style="position:relative;margin-bottom:12px">
-      <div class="ch">
-        <span class="ct">Vendas por dia — Tráfego</span>
-        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Vendas/dia</span></div>
-      </div>
-      <div style="position:relative"><canvas id="c-vendas-traf"></canvas><div class="tip" id="t-vendas-traf"></div></div>
+      ${kpiCard("Faturamento",fBRL(faturamento),`soma do valor de ${S.vendasTotal} vendas`,"var(--text-strong)")}
+      ${kpiCard("ROAS",roas.toFixed(2).replace(".",",")+"x",`${fBRL(faturamento)} / ${fBRL(investimentoRoas)}`,"var(--text-strong)")}
     </div>
     <div class="cc" style="position:relative">
       <div class="ch">
-        <span class="ct">Vendas por dia — Orgânico</span>
-        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_ORG}"></span>Vendas/dia</span></div>
+        <span class="ct">Conversão de fichas em vendas por dia</span>
+        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_INV}"></span>Conversão/dia</span></div>
       </div>
-      <div style="position:relative"><canvas id="c-vendas-org"></canvas><div class="tip" id="t-vendas-org"></div></div>
+      <div style="position:relative"><canvas id="c-conv"></canvas><div class="tip" id="t-conv"></div></div>
     </div>
-    ${daily.length===0?`<div class="err" style="margin-top:12px">Nenhuma venda no período selecionado.</div>`:""}
+    ${daily.length===0?`<div class="err" style="margin-top:12px">Nenhum dado no período selecionado.</div>`:""}
     <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
   requestAnimationFrame(()=>{
-    const box1=document.getElementById("c-vendas-traf")?.parentElement;
-    if(box1)drawBarSingle("c-vendas-traf",daily,"vendasTraf",CHART_TRAF,box1.clientWidth,200);
-    const box2=document.getElementById("c-vendas-org")?.parentElement;
-    if(box2)drawBarSingle("c-vendas-org",daily,"vendasOrg",CHART_ORG,box2.clientWidth,200);
-    setupTip("c-vendas-traf","t-vendas-traf",daily,[{name:"Vendas tráfego",color:CHART_TRAF,key:"vendasTraf",fmt:v=>String(v)}],40,12);
-    setupTip("c-vendas-org","t-vendas-org",daily,[{name:"Vendas orgânico",color:CHART_ORG,key:"vendasOrg",fmt:v=>String(v)}],40,12);
+    const box1=document.getElementById("c-conv")?.parentElement;
+    if(box1)drawBarPct("c-conv",daily,"conv",CHART_INV,box1.clientWidth,220);
+    setupTip("c-conv","t-conv",daily,[
+      {name:"Conversão",color:CHART_INV,key:"conv",fmt:v=>v.toFixed(2).replace(".",",")+"%"},
+      {name:"Vendas",color:CHART_TRAF,key:"vendasDay",fmt:v=>String(v)},
+      {name:"Fichas",color:CHART_ORG,key:"fichasDay",fmt:v=>String(v)}],44,12);
   });
 }
 
