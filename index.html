@@ -233,6 +233,7 @@ const S = {
   metaRows:[],           // linhas planas da Base Meta: {date,adId,adName,campId,campName,spend,clicks,impressions,videoViews,video75,igUrl}
   adIdMap:{},            // adId → {adName,campName,campId,igUrl} (fonte da verdade p/ casar fichas)
   fichaAttrib:[],        // fichas de tráfego casadas com anúncio/campanha: {date,adName,campName}
+  vendaAttrib:[],        // vendas de tráfego casadas com anúncio/campanha: {date,adName,campName,valor}
   trafego:{},            // date → count (fichas tráfego)
   organico:{},           // date → count (fichas orgânico)
   vendasTraf:{},         // date → count (vendas casadas com fichas de tráfego)
@@ -465,9 +466,21 @@ async function loadData(){
     // Prioridade: resolver pelo Ad ID batido na Base Meta (fonte da verdade — cobre o
     // caso do mesmo anúncio existir em campanhas diferentes com Ad IDs diferentes).
     // Se o Ad ID ainda não apareceu na Base Meta, cai no nome cru extraído da UTM.
+    // earliestByPhone/Email guardam, por contato, a ficha mais antiga (tráfego ou
+    // orgânico) — usados tanto para casar vendas quanto (no caso do tráfego) pra
+    // saber de qual anúncio/campanha essa ficha veio.
     const fichaAttrib=[];
+    const earliestByPhone={}, earliestByEmail={};
+    function noteFicha(type,phone,email,ms,adName,campName){
+      if(ms==null)return;
+      const iso=msToISO(ms-3*60*60*1000); // mesmo ajuste de fuso usado nas fichas (toISOFicha)
+      const rec={type,ms,iso,adName:adName||null,campName:campName||null};
+      if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]=rec;
+      if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]=rec;
+    }
     for(const r of trafRows){
-      const d=toISOFicha(r["Submitted At"]);if(!d)continue;
+      const d=toISOFicha(r["Submitted At"]);
+      const ms=parseDateTimeMs(r["Submitted At"]);
       const utmMed=(r["utm_medium"]||"").trim();
       const utmCont=(r["utm_content"]||r["utm_term"]||"").trim();
       const adIdMatch=utmCont.match(/_?id_?(\d{10,})$/);
@@ -482,8 +495,13 @@ async function loadData(){
         adName=adIdMap[rawAdId].adName||rawAdName;
         campName=adIdMap[rawAdId].campName||rawCampName;
       }
-      if(!adName&&!campName)continue;
-      fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)"});
+      noteFicha("traf",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),ms,adName,campName);
+      if(d&&(adName||campName)){
+        fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)"});
+      }
+    }
+    for(const r of orgRows){
+      noteFicha("org",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]));
     }
 
     // ── Vendas → casar com tráfego ou orgânico via e-mail/telefone ──
@@ -496,43 +514,38 @@ async function loadData(){
     // (primeira preenchida). Sem match nenhum → cai em "origem não identificada"
     // (não entra em nenhum bucket de data, então fica de fora dos gráficos/filtros
     // de período, mas conta no total de vendas e no faturamento).
-    const earliestByPhone={}, earliestByEmail={};
-    function noteFicha(type,phone,email,ms){
-      if(ms==null)return;
-      const iso=msToISO(ms-3*60*60*1000); // mesmo ajuste de fuso usado nas fichas (toISOFicha)
-      if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]={type,ms,iso};
-      if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]={type,ms,iso};
-    }
-    for(const r of trafRows){
-      noteFicha("traf",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]));
-    }
-    for(const r of orgRows){
-      noteFicha("org",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]));
-    }
+    // Vendas de tráfego casadas com anúncio/campanha (herdado da ficha) → vendaAttrib,
+    // usado nas colunas de Vendas/ROAS/Conversão das tabelas de Campanhas/Anúncios.
     const vTrafD={}, vOrgD={};
     let vTotal=0, vUnmatched=0, vFaturamento=0;
+    const vendaAttrib=[];
     for(const r of vendasRows){
       const nome=(r["Nome"]||"").trim();
       const ph=normalizePhone(r["Telefone"]);
       const em=normalizeEmail(r["Email"]);
       if(!nome&&!ph&&!em)continue; // linha vazia
       vTotal++;
-      vFaturamento+=parseBRL(r["Valor"]);
+      const valor=parseBRL(r["Valor"]);
+      vFaturamento+=valor;
       const candidates=[];
       if(ph&&earliestByPhone[ph])candidates.push(earliestByPhone[ph]);
       if(em&&earliestByEmail[em])candidates.push(earliestByEmail[em]);
       if(candidates.length){
         candidates.sort((a,b)=>a.ms-b.ms);
         const best=candidates[0];
-        if(best.type==="traf")vTrafD[best.iso]=(vTrafD[best.iso]||0)+1;
-        else vOrgD[best.iso]=(vOrgD[best.iso]||0)+1;
+        if(best.type==="traf"){
+          vTrafD[best.iso]=(vTrafD[best.iso]||0)+1;
+          vendaAttrib.push({date:best.iso,adName:best.adName||"(sem anúncio)",campName:best.campName||"(sem campanha)",valor});
+        }else{
+          vOrgD[best.iso]=(vOrgD[best.iso]||0)+1;
+        }
       }else{
         vUnmatched++;
       }
     }
 
     S.trafego=trafD; S.organico=orgD;
-    S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib;
+    S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib; S.vendaAttrib=vendaAttrib;
     S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched; S.vendasFaturamento=vFaturamento;
 
     const allDates=[...new Set([...Object.keys(mD),...Object.keys(trafD),...Object.keys(orgD)])].sort();
@@ -605,6 +618,21 @@ function getFichasForAd(start,end,adName,campFilter){
   }
   return n;
 }
+function getVendasForCamp(start,end,campName){
+  let n=0,valor=0;
+  for(const v of S.vendaAttrib){ if(v.date>=start&&v.date<=end&&v.campName===campName){n++;valor+=v.valor;} }
+  return {n,valor};
+}
+function getVendasForAd(start,end,adName,campFilter){
+  let n=0,valor=0;
+  for(const v of S.vendaAttrib){
+    if(v.date<start||v.date>end)continue;
+    if(v.adName!==adName)continue;
+    if(campFilter&&campFilter.size>0&&!campFilter.has(v.campName))continue;
+    n++;valor+=v.valor;
+  }
+  return {n,valor};
+}
 function getCampRows(start,end){
   const rows=getMetaRowsInRange(start,end);
   const byCamp={};
@@ -616,9 +644,13 @@ function getCampRows(start,end){
   }
   return Object.values(byCamp).map(c=>{
     const leads=getFichasForCamp(start,end,c.campName);
-    return {...c,leads,
+    const {n:vendas,valor:valorVendas}=getVendasForCamp(start,end,c.campName);
+    return {...c,leads,vendas,valorVendas,
       cpc:c.clicks>0?c.spend/c.clicks:0, ctr:c.impressions>0?(c.clicks/c.impressions)*100:0,
-      cpm:c.impressions>0?(c.spend/c.impressions)*1000:0, cpl:leads>0?c.spend/leads:0};
+      cpm:c.impressions>0?(c.spend/c.impressions)*1000:0, cpl:leads>0?c.spend/leads:0,
+      roas:c.spend>0?valorVendas/c.spend:0,
+      custoVenda:vendas>0?c.spend/vendas:0,
+      convFichaVenda:leads>0?(vendas/leads)*100:0};
   });
 }
 // selectedCamps: Set — quando vazio, consolida o anúncio em TODAS as campanhas onde ele aparece
@@ -638,9 +670,13 @@ function getAdRows(start,end,selectedCamps){
   }
   return Object.values(byAd).map(a=>{
     const leads=getFichasForAd(start,end,a.adName,hasSel?selectedCamps:null);
-    return {...a,leads,campNames:[...a.camps].join(", "),
+    const {n:vendas,valor:valorVendas}=getVendasForAd(start,end,a.adName,hasSel?selectedCamps:null);
+    return {...a,leads,vendas,valorVendas,campNames:[...a.camps].join(", "),
       cpc:a.clicks>0?a.spend/a.clicks:0, ctr:a.impressions>0?(a.clicks/a.impressions)*100:0,
-      cpm:a.impressions>0?(a.spend/a.impressions)*1000:0, cpl:leads>0?a.spend/leads:0};
+      cpm:a.impressions>0?(a.spend/a.impressions)*1000:0, cpl:leads>0?a.spend/leads:0,
+      roas:a.spend>0?valorVendas/a.spend:0,
+      custoVenda:vendas>0?a.spend/vendas:0,
+      convFichaVenda:leads>0?(vendas/leads)*100:0};
   });
 }
 
@@ -999,9 +1035,11 @@ function renderAnuncios(){
     return dir==="asc"?av-bv:bv-av;
   });
 
-  const tot=campRowsAll.reduce((a,c)=>({spend:a.spend+c.spend,clicks:a.clicks+c.clicks,impressions:a.impressions+c.impressions,leads:a.leads+c.leads}),{spend:0,clicks:0,impressions:0,leads:0});
+  const tot=campRowsAll.reduce((a,c)=>({spend:a.spend+c.spend,clicks:a.clicks+c.clicks,impressions:a.impressions+c.impressions,leads:a.leads+c.leads,vendas:a.vendas+c.vendas,valorVendas:a.valorVendas+c.valorVendas}),{spend:0,clicks:0,impressions:0,leads:0,vendas:0,valorVendas:0});
   const totCpl=tot.leads>0?tot.spend/tot.leads:0;
-  const totCtr=tot.impressions>0?(tot.clicks/tot.impressions)*100:0;
+  const totRoas=tot.spend>0?tot.valorVendas/tot.spend:0;
+  const totCustoVenda=tot.vendas>0?tot.spend/tot.vendas:0;
+  const totConvFichaVenda=tot.leads>0?(tot.vendas/tot.leads)*100:0;
 
   const selAds=sortedAds.filter(a=>S.selectedAds.has(a.adName));
   const adResumoText=selAds.length>0?selAds.map(a=>adResumoBlock(a)).join("\n"):"";
@@ -1022,11 +1060,16 @@ function renderAnuncios(){
       </div>
     </div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
-    <div class="g4" style="margin-bottom:20px">
+    <div class="g4" style="margin-bottom:13px">
       ${kpiCard("Investimento",fBRL(tot.spend),"Base Meta","var(--text-strong)")}
       ${kpiCard("Fichas",tot.leads.toLocaleString("pt-BR"),"tráfego atribuído a anúncio","var(--text-strong)")}
       ${kpiCard("Custo/ficha",totCpl>0?fBRL(totCpl):"—",`meta ${fBRL(META_CPL)}`,totCpl>0?statusColor(totCpl,META_CPL,false):"var(--text-strong)",false,totCpl,META_CPL,false)}
-      ${kpiCard("CTR",fPct(totCtr),"","var(--text-strong)")}
+      ${kpiCard("Vendas",tot.vendas.toLocaleString("pt-BR"),"tráfego atribuído a anúncio","var(--text-strong)")}
+    </div>
+    <div class="g3" style="margin-bottom:20px">
+      ${kpiCard("ROAS",totRoas>0?totRoas.toFixed(2).replace(".",",")+"x":"—","","var(--text-strong)")}
+      ${kpiCard("Custo por venda",totCustoVenda>0?fBRL(totCustoVenda):"—","","var(--text-strong)")}
+      ${kpiCard("Conversão de ficha em venda",fPct(totConvFichaVenda),"","var(--text-strong)")}
     </div>
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
@@ -1046,12 +1089,15 @@ function renderAnuncios(){
           ${thC("spend","Investimento",true)}
           ${thC("leads","Fichas",true)}
           ${thC("cpl","Custo/ficha",true)}
-          ${thC("clicks","Cliques",true)}
+          ${thC("cpc","CPC",true)}
           ${thC("ctr","CTR",true)}
           ${thC("cpm","CPM",true)}
+          ${thC("vendas","Vendas",true)}
+          ${thC("roas","ROAS",true)}
+          ${thC("convFichaVenda","Conv. ficha→venda",true)}
         </tr></thead>
         <tbody>
-          ${sortedCamps.length===0?`<tr><td colspan="8" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período (Base Meta ainda vazia)</td></tr>`:
+          ${sortedCamps.length===0?`<tr><td colspan="11" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período (Base Meta ainda vazia)</td></tr>`:
           sortedCamps.map(c=>{
             const sel=S.selectedCamps.has(c.campName);
             return `<tr onclick="toggleCamp('${escName(c.campName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
@@ -1060,9 +1106,12 @@ function renderAnuncios(){
               <td class="mono" style="text-align:right">${fBRL(c.spend)}</td>
               <td class="mono" style="text-align:right">${c.leads}</td>
               <td style="text-align:right;color:${c.cpl>0?statusColor(c.cpl,META_CPL,false):"var(--muted)"}">${c.cpl>0?fBRL(c.cpl):"—"}</td>
-              <td class="mono" style="text-align:right">${c.clicks.toLocaleString("pt-BR")}</td>
+              <td class="mono" style="text-align:right">${c.cpc>0?fBRL(c.cpc):"—"}</td>
               <td class="mono" style="text-align:right">${fPct(c.ctr)}</td>
               <td class="mono" style="text-align:right">${fBRL(c.cpm)}</td>
+              <td class="mono" style="text-align:right">${c.vendas}</td>
+              <td class="mono" style="text-align:right">${c.roas>0?c.roas.toFixed(2).replace(".",",")+"x":"—"}</td>
+              <td class="mono" style="text-align:right">${c.leads>0?fPct(c.convFichaVenda):"—"}</td>
             </tr>`;
           }).join("")}
         </tbody>
@@ -1088,13 +1137,16 @@ function renderAnuncios(){
           ${thC("spend","Investimento",false)}
           ${thC("leads","Fichas",false)}
           ${thC("cpl","Custo/ficha",false)}
-          ${thC("clicks","Cliques",false)}
+          ${thC("cpc","CPC",false)}
           ${thC("ctr","CTR",false)}
           ${thC("cpm","CPM",false)}
+          ${thC("vendas","Vendas",false)}
+          ${thC("roas","ROAS",false)}
+          ${thC("convFichaVenda","Conv. ficha→venda",false)}
           <th></th>
         </tr></thead>
         <tbody>
-          ${sortedAds.length===0?`<tr><td colspan="10" style="text-align:center;color:var(--hint);padding:20px">Sem dados de anúncios no período (Base Meta ainda vazia)</td></tr>`:
+          ${sortedAds.length===0?`<tr><td colspan="13" style="text-align:center;color:var(--hint);padding:20px">Sem dados de anúncios no período (Base Meta ainda vazia)</td></tr>`:
           sortedAds.map(a=>{
             const sel=S.selectedAds.has(a.adName);
             return `<tr onclick="toggleAd('${escName(a.adName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
@@ -1104,9 +1156,12 @@ function renderAnuncios(){
               <td class="mono" style="text-align:right">${fBRL(a.spend)}</td>
               <td class="mono" style="text-align:right">${a.leads}</td>
               <td style="text-align:right;color:${a.cpl>0?statusColor(a.cpl,META_CPL,false):"var(--muted)"}">${a.cpl>0?fBRL(a.cpl):"—"}</td>
-              <td class="mono" style="text-align:right">${a.clicks.toLocaleString("pt-BR")}</td>
+              <td class="mono" style="text-align:right">${a.cpc>0?fBRL(a.cpc):"—"}</td>
               <td class="mono" style="text-align:right">${fPct(a.ctr)}</td>
               <td class="mono" style="text-align:right">${fBRL(a.cpm)}</td>
+              <td class="mono" style="text-align:right">${a.vendas}</td>
+              <td class="mono" style="text-align:right">${a.roas>0?a.roas.toFixed(2).replace(".",",")+"x":"—"}</td>
+              <td class="mono" style="text-align:right">${a.leads>0?fPct(a.convFichaVenda):"—"}</td>
               <td style="text-align:center" onclick="event.stopPropagation()">${a.igUrl?`<a href="${a.igUrl}" target="_blank" style="color:#93c5fd;text-decoration:none;font-size:11px">Ver ↗</a>`:"—"}</td>
             </tr>`;
           }).join("")}
