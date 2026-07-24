@@ -156,6 +156,7 @@ input[type=date]::-webkit-calendar-picker-indicator{opacity:.4;cursor:pointer;fi
   </div>
   <nav class="hdr-tabs" id="hdr-tabs">
     <button class="htab htab-active" onclick="navTo('principal')">⊞ Principal</button>
+    <button class="htab" onclick="navTo('fichas')">📝 Fichas</button>
     <button class="htab" onclick="navTo('vendas')">💰 Vendas</button>
     <button class="htab" onclick="navTo('anuncios')">◈ Campanhas / Anúncios</button>
     <button class="htab" onclick="navTo('resumo')">📋 Resumo diário</button>
@@ -181,6 +182,7 @@ input[type=date]::-webkit-calendar-picker-indicator{opacity:.4;cursor:pointer;fi
 <div class="app-content">
   <div class="sw" id="loading"><div class="sp"></div><p class="st">Carregando dados...</p></div>
   <div id="page-principal" class="page active"></div>
+  <div id="page-fichas"    class="page"></div>
   <div id="page-vendas"    class="page"></div>
   <div id="page-anuncios"  class="page"></div>
   <div id="page-resumo"    class="page"></div>
@@ -234,6 +236,8 @@ const S = {
   adIdMap:{},            // adId → {adName,campName,campId,igUrl} (fonte da verdade p/ casar fichas)
   fichaAttrib:[],        // fichas de tráfego casadas com anúncio/campanha: {date,adName,campName}
   vendaAttrib:[],        // vendas de tráfego casadas com anúncio/campanha: {date,adName,campName,valor}
+  fichaOrigem:[],        // todas as fichas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal}
+  vendaOrigem:[],        // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor}
   trafego:{},            // date → count (fichas tráfego)
   organico:{},           // date → count (fichas orgânico)
   vendasTraf:{},         // date → count (vendas casadas com fichas de tráfego)
@@ -251,6 +255,12 @@ const S = {
   campSearch:"", adSearch:"",
   cSort:{col:"spend",dir:"desc"},
   aSort:{col:"spend",dir:"desc"},
+  // aba Fichas
+  fichasQual:"todas",     // 'todas' | 'traf' | 'org' — qualificação das fichas por fonte
+  selectedOrigens:new Set(),
+  origemSearch:"", canalSearch:"",
+  oSort:{col:"fichas",dir:"desc"},
+  mSort:{col:"fichas",dir:"desc"},
 };
 
 // ── Date helpers (GMT-3 Brasil) ───────────────────────────────────────────
@@ -470,19 +480,27 @@ async function loadData(){
     // orgânico) — usados tanto para casar vendas quanto (no caso do tráfego) pra
     // saber de qual anúncio/campanha essa ficha veio.
     const fichaAttrib=[];
+    const fichaOrigem=[]; // TODAS as fichas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal}
     const earliestByPhone={}, earliestByEmail={};
-    function noteFicha(type,phone,email,ms,adName,campName){
+    function noteFicha(type,phone,email,ms,adName,campName,origem,canal){
       if(ms==null)return;
       const iso=msToISO(ms-3*60*60*1000); // mesmo ajuste de fuso usado nas fichas (toISOFicha)
-      const rec={type,ms,iso,adName:adName||null,campName:campName||null};
+      const rec={type,ms,iso,adName:adName||null,campName:campName||null,origem:origem||null,canal:canal||null};
       if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]=rec;
       if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]=rec;
     }
     for(const r of trafRows){
       const d=toISOFicha(r["Submitted At"]);
       const ms=parseDateTimeMs(r["Submitted At"]);
-      const utmMed=(r["utm_medium"]||"").trim();
-      const utmCont=(r["utm_content"]||r["utm_term"]||"").trim();
+      // Alguns cliques chegam com o macro do Meta não substituído, ex:
+      // "{{campaign.name}}_id_{{campaign.id}}" / "{{ad.name}}_id_{{ad.id}}" —
+      // isso não é um nome de campanha/anúncio real, então tratamos como se
+      // não tivesse UTM nenhuma (cai em "sem anúncio"/"sem campanha"/"não informado").
+      const utmSrc=(r["utm_source"]||"").trim();
+      const utmMedRaw=(r["utm_medium"]||"").trim();
+      const utmContRaw=(r["utm_content"]||r["utm_term"]||"").trim();
+      const utmMed=utmMedRaw.includes("{{")?"":utmMedRaw;
+      const utmCont=utmContRaw.includes("{{")?"":utmContRaw;
       const adIdMatch=utmCont.match(/_?id_?(\d{10,})$/);
       const rawAdId=adIdMatch?adIdMatch[1]:null;
       const adNameMatch=utmCont.match(/^(.+?)_?id_?\d{10,}$/);
@@ -495,13 +513,18 @@ async function loadData(){
         adName=adIdMap[rawAdId].adName||rawAdName;
         campName=adIdMap[rawAdId].campName||rawCampName;
       }
-      noteFicha("traf",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),ms,adName,campName);
+      noteFicha("traf",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),ms,adName,campName,utmSrc,utmMed);
       if(d&&(adName||campName)){
         fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)"});
       }
+      if(d)fichaOrigem.push({date:d,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)"});
     }
     for(const r of orgRows){
-      noteFicha("org",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]));
+      const d=toISOFicha(r["Submitted At"]);
+      const utmSrc=(r["utm_source"]||"").trim();
+      const utmMed=(r["utm_medium"]||"").trim();
+      noteFicha("org",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]),null,null,utmSrc,utmMed);
+      if(d)fichaOrigem.push({date:d,tipo:"org",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)"});
     }
 
     // ── Vendas → casar com tráfego ou orgânico via e-mail/telefone ──
@@ -519,6 +542,7 @@ async function loadData(){
     const vTrafD={}, vOrgD={};
     let vTotal=0, vUnmatched=0, vFaturamento=0;
     const vendaAttrib=[];
+    const vendaOrigem=[]; // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor}
     for(const r of vendasRows){
       const nome=(r["Nome"]||"").trim();
       const ph=normalizePhone(r["Telefone"]);
@@ -539,6 +563,7 @@ async function loadData(){
         }else{
           vOrgD[best.iso]=(vOrgD[best.iso]||0)+1;
         }
+        vendaOrigem.push({date:best.iso,tipo:best.type,origem:best.origem||"(não informado)",canal:best.canal||"(não informado)",valor});
       }else{
         vUnmatched++;
       }
@@ -546,6 +571,7 @@ async function loadData(){
 
     S.trafego=trafD; S.organico=orgD;
     S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib; S.vendaAttrib=vendaAttrib;
+    S.fichaOrigem=fichaOrigem; S.vendaOrigem=vendaOrigem;
     S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched; S.vendasFaturamento=vFaturamento;
 
     const allDates=[...new Set([...Object.keys(mD),...Object.keys(trafD),...Object.keys(orgD)])].sort();
@@ -680,6 +706,50 @@ function getAdRows(start,end,selectedCamps){
   });
 }
 
+// ── Aba Fichas: Origem (UTM source) e Canal (UTM medium) — todas as fichas ─
+// qual: 'todas' | 'traf' | 'org' — filtra por qualificação da ficha (fonte)
+function passQual(tipo,qual){ return !qual||qual==="todas"||tipo===qual; }
+function getOrigemRows(start,end,qual){
+  const byFichas={}, byVendas={};
+  for(const f of S.fichaOrigem){
+    if(f.date<start||f.date>end)continue;
+    if(!passQual(f.tipo,qual))continue;
+    byFichas[f.origem]=(byFichas[f.origem]||0)+1;
+  }
+  for(const v of S.vendaOrigem){
+    if(v.date<start||v.date>end)continue;
+    if(!passQual(v.tipo,qual))continue;
+    byVendas[v.origem]=(byVendas[v.origem]||0)+1;
+  }
+  const origens=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
+  return [...origens].map(o=>{
+    const fichas=byFichas[o]||0, vendas=byVendas[o]||0;
+    return {origem:o,fichas,vendas,conv:fichas>0?(vendas/fichas)*100:0};
+  });
+}
+// selectedOrigens: Set — quando preenchido, restringe o canal só às fichas/vendas daquela(s) origem(ns)
+function getCanalRows(start,end,qual,selectedOrigens){
+  const hasSel=selectedOrigens&&selectedOrigens.size>0;
+  const byFichas={}, byVendas={};
+  for(const f of S.fichaOrigem){
+    if(f.date<start||f.date>end)continue;
+    if(!passQual(f.tipo,qual))continue;
+    if(hasSel&&!selectedOrigens.has(f.origem))continue;
+    byFichas[f.canal]=(byFichas[f.canal]||0)+1;
+  }
+  for(const v of S.vendaOrigem){
+    if(v.date<start||v.date>end)continue;
+    if(!passQual(v.tipo,qual))continue;
+    if(hasSel&&!selectedOrigens.has(v.origem))continue;
+    byVendas[v.canal]=(byVendas[v.canal]||0)+1;
+  }
+  const canais=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
+  return [...canais].map(c=>{
+    const fichas=byFichas[c]||0, vendas=byVendas[c]||0;
+    return {canal:c,fichas,vendas,conv:fichas>0?(vendas/fichas)*100:0};
+  });
+}
+
 // ── Navigation ────────────────────────────────────────────────────────────
 function navTo(page){
   S.currentPage=page;
@@ -722,6 +792,24 @@ function sortAnuncios(col){
   if(S.aSort.col===col)S.aSort.dir=S.aSort.dir==="asc"?"desc":"asc";else{S.aSort.col=col;S.aSort.dir="desc";}
   renderAnuncios();
 }
+
+// ── Cross-filtering: aba Fichas (Origem / Canal) ───────────────────────────
+function setFichasQual(q){ S.fichasQual=q; renderFichas(); }
+function toggleOrigem(name){
+  if(S.selectedOrigens.has(name))S.selectedOrigens.delete(name);else S.selectedOrigens.add(name);
+  renderFichas();
+}
+function clearOrigens(){S.selectedOrigens.clear();renderFichas();}
+function setOrigemSearch(v){S.origemSearch=v;renderFichas();}
+function setCanalSearch(v){S.canalSearch=v;renderFichas();}
+function sortOrigens(col){
+  if(S.oSort.col===col)S.oSort.dir=S.oSort.dir==="asc"?"desc":"asc";else{S.oSort.col=col;S.oSort.dir="desc";}
+  renderFichas();
+}
+function sortCanais(col){
+  if(S.mSort.col===col)S.mSort.dir=S.mSort.dir==="asc"?"desc":"asc";else{S.mSort.col=col;S.mSort.dir="desc";}
+  renderFichas();
+}
 function copyAdResumo(){
   const el=document.getElementById("page-anuncios");
   const text=el?._adResumoText||"";if(!text)return;
@@ -736,7 +824,7 @@ function copyAdResumo(){
 function renderHeader(){
   const p=S.currentPage;
   document.querySelectorAll("#hdr-tabs .htab").forEach((btn,i)=>{
-    const ids=["principal","vendas","anuncios","resumo"];
+    const ids=["principal","fichas","vendas","anuncios","resumo"];
     btn.classList.toggle("htab-active",ids[i]===p);
   });
   const per=getCurrentPeriod();
@@ -985,6 +1073,140 @@ function renderPrincipal(){
     setupTip("c-traf","t-traf",daily,[{name:"Fichas tráfego",color:CHART_TRAF,key:"trafficLeads",fmt:v=>String(v)}],40,12);
     setupTip("c-org","t-org",daily,[{name:"Fichas orgânico",color:CHART_ORG,key:"organicLeads",fmt:v=>String(v)}],40,12);
   });
+}
+
+// ── Render: Fichas (Origem / Canal) ───────────────────────────────────────
+function renderFichas(){
+  const el=document.getElementById("page-fichas");if(!el)return;
+  const start=S.startDate,end=S.endDate;
+  const per=getCurrentPeriod();
+  const escName=s=>String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+  const qual=S.fichasQual;
+
+  const origemRowsAll=getOrigemRows(start,end,qual);
+  const _oq=S.origemSearch.trim().toLowerCase();
+  const origemRows=_oq?origemRowsAll.filter(o=>o.origem.toLowerCase().includes(_oq)):origemRowsAll;
+  const {col:oCol,dir:oDir}=S.oSort;
+  const sortedOrigens=[...origemRows].sort((a,b)=>{
+    const av=a[oCol]??0,bv=b[oCol]??0;
+    if(typeof av==="string")return oDir==="asc"?av.localeCompare(bv):bv.localeCompare(av);
+    return oDir==="asc"?av-bv:bv-av;
+  });
+
+  const canalRowsAll=getCanalRows(start,end,qual,S.selectedOrigens);
+  const _mq=S.canalSearch.trim().toLowerCase();
+  const canalRows=_mq?canalRowsAll.filter(c=>c.canal.toLowerCase().includes(_mq)):canalRowsAll;
+  const {col:mCol,dir:mDir}=S.mSort;
+  const sortedCanais=[...canalRows].sort((a,b)=>{
+    const av=a[mCol]??0,bv=b[mCol]??0;
+    if(typeof av==="string")return mDir==="asc"?av.localeCompare(bv):bv.localeCompare(av);
+    return mDir==="asc"?av-bv:bv-av;
+  });
+
+  const tot=origemRowsAll.reduce((a,o)=>({fichas:a.fichas+o.fichas,vendas:a.vendas+o.vendas}),{fichas:0,vendas:0});
+  const totConv=tot.fichas>0?(tot.vendas/tot.fichas)*100:0;
+
+  function thO(colKey,lbl){
+    const active=oCol===colKey;
+    const arrow=active?(oDir==="asc"?" ↑":" ↓"):" ↕";
+    return `<th onclick="sortOrigens('${colKey}')" style="text-align:right;cursor:pointer">${lbl}<span style="color:${active?"#60a5fa":"var(--hint)"};margin-left:3px">${arrow}</span></th>`;
+  }
+  function thM(colKey,lbl){
+    const active=mCol===colKey;
+    const arrow=active?(mDir==="asc"?" ↑":" ↓"):" ↕";
+    return `<th onclick="sortCanais('${colKey}')" style="text-align:right;cursor:pointer">${lbl}<span style="color:${active?"#60a5fa":"var(--hint)"};margin-left:3px">${arrow}</span></th>`;
+  }
+
+  el.innerHTML=`
+    <div class="hdr" style="margin-bottom:6px">
+      <div>
+        <div class="hdr-title">Fichas</div>
+        <div class="hdr-sub">${per.s&&per.e?`${fDateBR(per.s)} → ${fDateBR(per.e)}`:""} · ${sortedOrigens.length} origens · ${sortedCanais.length} canais</div>
+      </div>
+    </div>
+    ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--hint)">Qualificação das fichas por fonte:</span>
+      <div class="presets">
+        <button class="btn-pre${qual==="todas"?" on":""}" onclick="setFichasQual('todas')">Todas</button>
+        <button class="btn-pre${qual==="traf"?" on":""}" onclick="setFichasQual('traf')">Só tráfego</button>
+        <button class="btn-pre${qual==="org"?" on":""}" onclick="setFichasQual('org')">Só orgânico</button>
+      </div>
+    </div>
+
+    <div class="g3" style="margin-bottom:20px">
+      ${kpiCard("Fichas",tot.fichas.toLocaleString("pt-BR"),"","var(--text-strong)")}
+      ${kpiCard("Vendas",tot.vendas.toLocaleString("pt-BR"),"","var(--text-strong)")}
+      ${kpiCard("Conversão de ficha em venda",fPct(totConv),"","var(--text-strong)")}
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <div class="section-lbl" style="margin-bottom:0">Origem da ficha (UTM source)</div>
+      ${S.selectedOrigens.size>0?`<button onclick="clearOrigens()" style="font-size:10px;padding:3px 9px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#f87171;border-radius:5px;cursor:pointer;font-family:'DM Sans',sans-serif">✕ Limpar seleção (${S.selectedOrigens.size})</button>`:""}
+      <span style="font-size:10px;color:var(--hint)">Clique para filtrar o canal por origem</span>
+    </div>
+    <div style="position:relative;margin-bottom:10px">
+      <input oninput="setOrigemSearch(this.value)" value="${S.origemSearch}" placeholder="Buscar origem…" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none;box-sizing:border-box"/>
+    </div>
+    <div class="cc" style="padding:0;overflow:hidden;margin-bottom:22px">
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th style="width:36px"></th>
+          <th onclick="sortOrigens('origem')" style="cursor:pointer">Origem</th>
+          ${thO("fichas","Quantidade de fichas")}
+          ${thO("vendas","Quantidade de vendas")}
+          ${thO("conv","Conv. ficha→venda")}
+        </tr></thead>
+        <tbody>
+          ${sortedOrigens.length===0?`<tr><td colspan="5" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
+          sortedOrigens.map(o=>{
+            const sel=S.selectedOrigens.has(o.origem);
+            return `<tr onclick="toggleOrigem('${escName(o.origem)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
+              <td style="text-align:center">${chkBox(sel)}</td>
+              <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${o.origem}</td>
+              <td class="mono" style="text-align:right">${o.fichas.toLocaleString("pt-BR")}</td>
+              <td class="mono" style="text-align:right">${o.vendas.toLocaleString("pt-BR")}</td>
+              <td class="mono" style="text-align:right">${o.fichas>0?fPct(o.conv):"—"}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <div class="section-lbl" style="margin-bottom:0">Canal da ficha (UTM medium)${S.selectedOrigens.size>0?` — dentro de: ${[...S.selectedOrigens].join(", ")}`:" — consolidado (todas as origens)"}</div>
+      <span style="font-size:10px;color:var(--hint)">Clique em uma origem acima para filtrar</span>
+    </div>
+    <div style="position:relative;margin-bottom:10px">
+      <input oninput="setCanalSearch(this.value)" value="${S.canalSearch}" placeholder="Buscar canal…" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none;box-sizing:border-box"/>
+    </div>
+    <div class="cc" style="padding:0;overflow:hidden">
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th onclick="sortCanais('canal')" style="cursor:pointer">Canal</th>
+          ${thM("fichas","Quantidade de fichas")}
+          ${thM("vendas","Quantidade de vendas")}
+          ${thM("conv","Conv. ficha→venda")}
+        </tr></thead>
+        <tbody>
+          ${sortedCanais.length===0?`<tr><td colspan="4" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
+          sortedCanais.map(c=>{
+            return `<tr>
+              <td style="color:var(--text)">${c.canal}</td>
+              <td class="mono" style="text-align:right">${c.fichas.toLocaleString("pt-BR")}</td>
+              <td class="mono" style="text-align:right">${c.vendas.toLocaleString("pt-BR")}</td>
+              <td class="mono" style="text-align:right">${c.fichas>0?fPct(c.conv):"—"}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
 }
 
 // ── Render: Campanhas / Anúncios ──────────────────────────────────────────
@@ -1447,6 +1669,7 @@ function render(){
   if(S.loading)return;
   renderHeader();
   if(S.currentPage==="principal")renderPrincipal();
+  else if(S.currentPage==="fichas")renderFichas();
   else if(S.currentPage==="anuncios")renderAnuncios();
   else if(S.currentPage==="vendas")renderVendas();
   else if(S.currentPage==="resumo")renderResumo();
