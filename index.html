@@ -706,13 +706,33 @@ function getAdRows(start,end,selectedCamps){
   });
 }
 
-// ── Aba Fichas: Origem (UTM source) e Canal (UTM medium) — todas as fichas ─
+// ── Aba Fichas: Origem (UTM source) e Canal ───────────────────────────────
 // qual: 'todas' | 'traf' | 'org' — filtra por qualificação da ficha (fonte)
 function passQual(tipo,qual){ return !qual||qual==="todas"||tipo===qual; }
-// Agrupamentos manuais: qualquer origem contendo "FBAds" vira uma única linha "Tráfego";
-// qualquer canal contendo "oro_jul26" vira uma única linha "Tráfego".
-function normOrigem(o){ return (o&&o.includes("FBAds"))?"Tráfego":o; }
-function normCanal(c){ return (c&&c.includes("oro_jul26"))?"Tráfego":c; }
+// Tabela Origem: de-para de tráfego pago + nomes amigáveis pro restante.
+const ORIGEM_MAP = {
+  "wp":"Whatsapp",
+  "wp-antigos":"Whatsapp",
+  "youtube":"Youtube",
+  "qrcode":"Youtube",
+  "api-pvd":"API",
+  "instagram":"Instagram Orgânico",
+  "em,ActiveCampaign":"Email",
+  "em":"Email",
+  "(não informado)":"Sem UTM",
+};
+function normOrigem(o){
+  if(o&&o.includes("FBAds"))return "Tráfego";
+  return ORIGEM_MAP[o]||o;
+}
+// Tabela Canal: nome bruto da UTM source (sem tradução), exceto:
+//  • tráfego pago (FBAds) → agrupado em "Tráfego" (igual à tabela de Origem)
+//  • "instagram" → detalhado por medium, ex: "instagram-live", "instagram-bio"
+function canalKey(origem,canal){
+  if(origem&&origem.includes("FBAds"))return "Tráfego";
+  if(origem==="instagram")return `${origem}-${canal||"(não informado)"}`;
+  return origem||"(não informado)";
+}
 function getOrigemRows(start,end,qual){
   const byFichas={}, byVendas={};
   for(const f of S.fichaOrigem){
@@ -735,8 +755,8 @@ function getOrigemRows(start,end,qual){
       repres:totalFichas>0?(fichas/totalFichas)*100:0};
   });
 }
-// selectedOrigens: Set — quando preenchido, restringe o canal só às fichas/vendas daquela(s) origem(ns)
-// (comparado já normalizado, já que é isso que aparece selecionável na tabela de Origem)
+// selectedOrigens: Set de labels JÁ TRADUZIDOS (os que aparecem clicáveis na tabela de
+// Origem) — quando preenchido, restringe o canal só às fichas/vendas daquela(s) origem(ns).
 function getCanalRows(start,end,qual,selectedOrigens){
   const hasSel=selectedOrigens&&selectedOrigens.size>0;
   const byFichas={}, byVendas={};
@@ -744,14 +764,14 @@ function getCanalRows(start,end,qual,selectedOrigens){
     if(f.date<start||f.date>end)continue;
     if(!passQual(f.tipo,qual))continue;
     if(hasSel&&!selectedOrigens.has(normOrigem(f.origem)))continue;
-    const c=normCanal(f.canal);
+    const c=canalKey(f.origem,f.canal);
     byFichas[c]=(byFichas[c]||0)+1;
   }
   for(const v of S.vendaOrigem){
     if(v.date<start||v.date>end)continue;
     if(!passQual(v.tipo,qual))continue;
     if(hasSel&&!selectedOrigens.has(normOrigem(v.origem)))continue;
-    const c=normCanal(v.canal);
+    const c=canalKey(v.origem,v.canal);
     byVendas[c]=(byVendas[c]||0)+1;
   }
   const canais=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
@@ -1190,7 +1210,7 @@ function renderFichas(){
     </div>
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-      <div class="section-lbl" style="margin-bottom:0">Canal da ficha (UTM medium)${S.selectedOrigens.size>0?` — dentro de: ${[...S.selectedOrigens].join(", ")}`:" — consolidado (todas as origens)"}</div>
+      <div class="section-lbl" style="margin-bottom:0">Canal da ficha${S.selectedOrigens.size>0?` — dentro de: ${[...S.selectedOrigens].join(", ")}`:" — consolidado (todas as origens)"}</div>
       <span style="font-size:10px;color:var(--hint)">Clique em uma origem acima para filtrar</span>
     </div>
     <div style="position:relative;margin-bottom:10px">
