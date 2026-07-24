@@ -1249,10 +1249,12 @@ function renderFichas(){
   const tot=origemRowsAll.reduce((a,o)=>({fichas:a.fichas+o.fichas,vendas:a.vendas+o.vendas}),{fichas:0,vendas:0});
   const totConv=tot.fichas>0?(tot.vendas/tot.fichas)*100:0;
 
-  // Fichas por dia × meta (projeção) para a(s) origem(ns) selecionada(s) — só existe
-  // quando há seleção, aparece abaixo da tabela de Canal.
+  // Fichas por dia × meta (projeção), abaixo da tabela de Canal — com origem(ns)
+  // selecionada(s), ou o total (todas as origens com meta) quando nada selecionado.
   const hasOrigemSel=S.selectedOrigens.size>0;
-  const origemChartData=hasOrigemSel?getOrigemDailyVsMeta(S.selectedOrigens,qual):[];
+  const origensParaGrafico=hasOrigemSel?S.selectedOrigens:new Set(Object.keys(META_DAILY));
+  const origemChartData=getOrigemDailyVsMeta(origensParaGrafico,qual);
+  const origemChartTitle=hasOrigemSel?[...S.selectedOrigens].join(", "):"Total";
 
   function thO(colKey,lbl){
     const active=oCol===colKey;
@@ -1364,27 +1366,24 @@ function renderFichas(){
       </table>
       </div>
     </div>
-    ${hasOrigemSel?`
     <div class="cc" style="position:relative;margin-top:16px">
       <div class="ch">
-        <span class="ct">Fichas por dia — ${[...S.selectedOrigens].map(o=>o).join(", ")}</span>
+        <span class="ct">Fichas por dia — ${origemChartTitle}</span>
         <div class="lg">
           <span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Fichas reais</span>
           <span class="li"><span class="ll" style="background:${CHART_CPL};opacity:.5;border-top:1px dashed ${CHART_CPL}"></span>Meta (projeção)</span>
         </div>
       </div>
       <div style="position:relative"><canvas id="c-origem-meta"></canvas><div class="tip" id="t-origem-meta"></div></div>
-    </div>`:""}
+    </div>
     <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
-  if(hasOrigemSel){
-    requestAnimationFrame(()=>{
-      const box=document.getElementById("c-origem-meta")?.parentElement;
-      if(box)drawBarsWithMetaLine("c-origem-meta",origemChartData,"fichas","meta",CHART_TRAF,CHART_CPL,box.clientWidth,220);
-      setupTip("c-origem-meta","t-origem-meta",origemChartData,[
-        {name:"Fichas reais",color:CHART_TRAF,key:"fichas",fmt:v=>String(v)},
-        {name:"Meta (projeção)",color:CHART_CPL,key:"meta",fmt:v=>String(v)}],44,14);
-    });
-  }
+  requestAnimationFrame(()=>{
+    const box=document.getElementById("c-origem-meta")?.parentElement;
+    if(box)drawBarsWithMetaLine("c-origem-meta",origemChartData,"fichas","meta",CHART_TRAF,CHART_CPL,box.clientWidth,220);
+    setupTip("c-origem-meta","t-origem-meta",origemChartData,[
+      {name:"Fichas reais",color:CHART_TRAF,key:"fichas",fmt:v=>String(v)},
+      {name:"Meta (projeção)",color:CHART_CPL,key:"meta",fmt:v=>String(v)}],44,14);
+  });
 }
 
 // ── Render: Campanhas / Anúncios ──────────────────────────────────────────
