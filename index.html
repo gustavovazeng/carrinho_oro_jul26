@@ -709,17 +709,23 @@ function getAdRows(start,end,selectedCamps){
 // ── Aba Fichas: Origem (UTM source) e Canal (UTM medium) — todas as fichas ─
 // qual: 'todas' | 'traf' | 'org' — filtra por qualificação da ficha (fonte)
 function passQual(tipo,qual){ return !qual||qual==="todas"||tipo===qual; }
+// Agrupamentos manuais: qualquer origem contendo "FBAds" vira uma única linha "Tráfego";
+// qualquer canal contendo "oro_jul26" vira uma única linha "Tráfego".
+function normOrigem(o){ return (o&&o.includes("FBAds"))?"Tráfego":o; }
+function normCanal(c){ return (c&&c.includes("oro_jul26"))?"Tráfego":c; }
 function getOrigemRows(start,end,qual){
   const byFichas={}, byVendas={};
   for(const f of S.fichaOrigem){
     if(f.date<start||f.date>end)continue;
     if(!passQual(f.tipo,qual))continue;
-    byFichas[f.origem]=(byFichas[f.origem]||0)+1;
+    const o=normOrigem(f.origem);
+    byFichas[o]=(byFichas[o]||0)+1;
   }
   for(const v of S.vendaOrigem){
     if(v.date<start||v.date>end)continue;
     if(!passQual(v.tipo,qual))continue;
-    byVendas[v.origem]=(byVendas[v.origem]||0)+1;
+    const o=normOrigem(v.origem);
+    byVendas[o]=(byVendas[o]||0)+1;
   }
   const origens=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
   return [...origens].map(o=>{
@@ -728,20 +734,23 @@ function getOrigemRows(start,end,qual){
   });
 }
 // selectedOrigens: Set — quando preenchido, restringe o canal só às fichas/vendas daquela(s) origem(ns)
+// (comparado já normalizado, já que é isso que aparece selecionável na tabela de Origem)
 function getCanalRows(start,end,qual,selectedOrigens){
   const hasSel=selectedOrigens&&selectedOrigens.size>0;
   const byFichas={}, byVendas={};
   for(const f of S.fichaOrigem){
     if(f.date<start||f.date>end)continue;
     if(!passQual(f.tipo,qual))continue;
-    if(hasSel&&!selectedOrigens.has(f.origem))continue;
-    byFichas[f.canal]=(byFichas[f.canal]||0)+1;
+    if(hasSel&&!selectedOrigens.has(normOrigem(f.origem)))continue;
+    const c=normCanal(f.canal);
+    byFichas[c]=(byFichas[c]||0)+1;
   }
   for(const v of S.vendaOrigem){
     if(v.date<start||v.date>end)continue;
     if(!passQual(v.tipo,qual))continue;
-    if(hasSel&&!selectedOrigens.has(v.origem))continue;
-    byVendas[v.canal]=(byVendas[v.canal]||0)+1;
+    if(hasSel&&!selectedOrigens.has(normOrigem(v.origem)))continue;
+    const c=normCanal(v.canal);
+    byVendas[c]=(byVendas[c]||0)+1;
   }
   const canais=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
   return [...canais].map(c=>{
