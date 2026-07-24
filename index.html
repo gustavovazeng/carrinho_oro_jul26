@@ -1325,9 +1325,9 @@ function renderFichas(){
     </div>
 
     <div class="g3" style="margin-bottom:20px">
-      ${kpiCard("Fichas",tot.fichas.toLocaleString("pt-BR"),`<span style="color:${totMetaAteHoje>0?statusColor(totPctAteHoje,100,true):"var(--hint)"}">meta até hoje: ${totMetaAteHoje>0?totMetaAteHoje.toLocaleString("pt-BR"):"—"}</span>`,"var(--text-strong)")}
+      ${kpiCard("Fichas",tot.fichas.toLocaleString("pt-BR"),`meta até hoje: ${totMetaAteHoje>0?totMetaAteHoje.toLocaleString("pt-BR"):"—"}`,totMetaAteHoje>0?statusColor(totPctAteHoje,100,true):"var(--text-strong)")}
       ${kpiCard("Vendas",tot.vendas.toLocaleString("pt-BR"),"","var(--text-strong)")}
-      ${kpiCard("Conversão de ficha em venda",fPct(totConv),`<span style="color:${totMetaAteHoje>0?statusColor(totPctAteHoje,100,true):"var(--hint)"}">atingimento até hoje: ${totMetaAteHoje>0?fPct(totPctAteHoje):"—"}</span>`,"var(--text-strong)")}
+      ${kpiCard("Conversão de ficha em venda",fPct(totConv),"","var(--text-strong)")}
     </div>
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
