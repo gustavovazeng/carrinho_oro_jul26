@@ -254,6 +254,32 @@ function metaAteHoje(origem){
   let sum=0;for(let i=0;i<=dayIdx;i++)sum+=arr[i];
   return sum;
 }
+function addDaysISO(iso,n){
+  const [y,m,d]=iso.split("-").map(Number);
+  const dt=new Date(Date.UTC(y,m-1,d)+n*86400000);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,"0")}-${String(dt.getUTCDate()).padStart(2,"0")}`;
+}
+// Fichas reais por dia (dia 0..16 do lançamento) para um conjunto de origens já
+// normalizadas (labels da tabela de Origem) somadas, junto com a meta diária (soma
+// dos META_DAILY das mesmas origens) — usado no gráfico de projeção da aba Fichas.
+function getOrigemDailyVsMeta(origensSet,qual){
+  const byDate={};
+  for(const f of S.fichaOrigem){
+    if(!passQual(f.tipo,qual))continue;
+    const o=normOrigem(f.origem);
+    if(!origensSet.has(o))continue;
+    byDate[f.date]=(byDate[f.date]||0)+1;
+  }
+  const nDays=Math.max(1,...[...origensSet].map(o=>(META_DAILY[o]||[]).length),17);
+  const data=[];
+  for(let i=0;i<nDays;i++){
+    const date=addDaysISO(META_LAUNCH_START,i);
+    let meta=0;
+    for(const o of origensSet){ const arr=META_DAILY[o]; if(arr&&arr[i]!=null)meta+=arr[i]; }
+    data.push({date,label:fDate(date),fichas:byDate[date]||0,meta});
+  }
+  return data;
+}
 
 // Chart colors
 const CHART_INV  = "#3b82f6";
@@ -1037,6 +1063,43 @@ function drawBarPct(id,data,key,color,cssW,cssH){
   data.forEach((d,i)=>{if(i%step===0)ctx.fillText(d.label,xP(i),P.t+cH+18);});
 }
 
+// Barras de fichas reais por dia + linha tracejada da meta (projeção) — usado no
+// gráfico de origem(ns) selecionada(s) na aba Fichas.
+function drawBarsWithMetaLine(id,data,barKey,metaKey,barColor,lineColor,cssW,cssH){
+  const ctx=initCanvas(id,cssW,cssH);if(!ctx)return;
+  const P={t:14,r:14,b:28,l:44};
+  const cW=cssW-P.l-P.r,cH=cssH-P.t-P.b;
+  const barVals=data.map(d=>d[barKey]||0);
+  const lineVals=data.map(d=>d[metaKey]||0);
+  const maxV=Math.max(...barVals,...lineVals,1)*1.15;
+  const n=data.length;
+  const barW=Math.max(4,Math.min(22,(cW/Math.max(n,1))*0.6));
+  const xP=i=>P.l+(n>1?i/(n-1):0.5)*cW;
+  const yP=v=>P.t+cH-(v/maxV)*cH;
+  ctx.setLineDash([]);
+  for(let i=0;i<=4;i++){
+    const y=P.t+(i/4)*cH;
+    ctx.strokeStyle=GRID_C;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(P.l+cW,y);ctx.stroke();
+    ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="right";
+    ctx.fillText(Math.round(maxV-(i/4)*maxV),P.l-4,y+3);
+  }
+  drawBars(ctx,xP,yP,P.t+cH,barVals,barColor,barW);
+  ctx.beginPath();ctx.strokeStyle=lineColor;ctx.lineWidth=2;ctx.setLineDash([5,4]);
+  lineVals.forEach((v,i)=>{ i===0?ctx.moveTo(xP(i),yP(v)):ctx.lineTo(xP(i),yP(v)); });
+  ctx.stroke();ctx.setLineDash([]);
+  const step=n>60?7:n>30?3:n>14?2:1;
+  ctx.textAlign="center";
+  barVals.forEach((v,i)=>{
+    if(v>0&&(n<=30||i%step===0)){
+      ctx.fillStyle="#e8edf6";ctx.font=`bold ${Math.min(10,Math.max(7,barW))}px 'DM Mono',monospace`;
+      ctx.fillText(v,xP(i),yP(v)-4);
+    }
+  });
+  ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";
+  data.forEach((d,i)=>{if(i%step===0)ctx.fillText(d.label,xP(i),P.t+cH+18);});
+}
+
 function setupTip(cid,tid,data,lines,padL=58,padR=12){
   const c=document.getElementById(cid),t=document.getElementById(tid);
   if(!c||!t)return;
@@ -1186,6 +1249,11 @@ function renderFichas(){
   const tot=origemRowsAll.reduce((a,o)=>({fichas:a.fichas+o.fichas,vendas:a.vendas+o.vendas}),{fichas:0,vendas:0});
   const totConv=tot.fichas>0?(tot.vendas/tot.fichas)*100:0;
 
+  // Fichas por dia × meta (projeção) para a(s) origem(ns) selecionada(s) — só existe
+  // quando há seleção, aparece abaixo da tabela de Canal.
+  const hasOrigemSel=S.selectedOrigens.size>0;
+  const origemChartData=hasOrigemSel?getOrigemDailyVsMeta(S.selectedOrigens,qual):[];
+
   function thO(colKey,lbl){
     const active=oCol===colKey;
     const arrow=active?(oDir==="asc"?" ↑":" ↓"):" ↕";
@@ -1296,7 +1364,27 @@ function renderFichas(){
       </table>
       </div>
     </div>
+    ${hasOrigemSel?`
+    <div class="cc" style="position:relative;margin-top:16px">
+      <div class="ch">
+        <span class="ct">Fichas por dia — ${[...S.selectedOrigens].map(o=>o).join(", ")}</span>
+        <div class="lg">
+          <span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Fichas reais</span>
+          <span class="li"><span class="ll" style="background:${CHART_CPL};opacity:.5;border-top:1px dashed ${CHART_CPL}"></span>Meta (projeção)</span>
+        </div>
+      </div>
+      <div style="position:relative"><canvas id="c-origem-meta"></canvas><div class="tip" id="t-origem-meta"></div></div>
+    </div>`:""}
     <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
+  if(hasOrigemSel){
+    requestAnimationFrame(()=>{
+      const box=document.getElementById("c-origem-meta")?.parentElement;
+      if(box)drawBarsWithMetaLine("c-origem-meta",origemChartData,"fichas","meta",CHART_TRAF,CHART_CPL,box.clientWidth,220);
+      setupTip("c-origem-meta","t-origem-meta",origemChartData,[
+        {name:"Fichas reais",color:CHART_TRAF,key:"fichas",fmt:v=>String(v)},
+        {name:"Meta (projeção)",color:CHART_CPL,key:"meta",fmt:v=>String(v)}],44,14);
+    });
+  }
 }
 
 // ── Render: Campanhas / Anúncios ──────────────────────────────────────────
