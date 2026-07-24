@@ -223,6 +223,38 @@ const LISTA_LEADS_TOTAL       = 209896;    // tamanho da lista de leads deste la
 const INVESTIMENTO_ROAS_EXTRA = 1538338.58; // custo fixo somado ao investimento em mídia p/ ROAS
 // Faturamento agora usa o valor real de cada venda (coluna "Valor"), não um ticket médio fixo.
 
+// ── Metas diárias de fichas (aba Fichas) ────────────────────────────────────
+// Fonte: planejamento-fichas-oro_jul26 - fonte_ficha.csv, cenário "meta 0,9".
+// Dia 0 do lançamento = 22/07/2026. Um índice por dia (0 a 16); "Tráfego" =
+// Facebook + Google somados dia a dia. Depois do dia 16 o lançamento é
+// considerado encerrado: a meta "até hoje" trava no valor consolidado (soma
+// de todo o array), que é sempre derivada dos próprios valores diários — não
+// existe um número consolidado hardcoded solto que possa ficar inconsistente.
+const META_LAUNCH_START = "2026-07-22"; // dia 0
+const META_DAILY = {
+  "Tráfego":            [39,2622,2612,3674,2861,428,281,386,330,248,200,239,228,221,193,259,2], // Facebook+Google
+  "Instagram Orgânico": [134,239,230,285,425,217,104,134,226,176,85,121,125,119,122,91,46],
+  "Youtube":            [1386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  "Whatsapp":           [3002,3331,2300,3165,1045,653,292,361,189,216,107,138,121,88,106,77,12],
+  "Sem UTM":            [30,21,13,17,12,5,34,73,68,48,23,36,31,22,43,3,0],
+  "API":                [692,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  "Email":              [23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+};
+function daysBetweenISO(isoA,isoB){
+  const [ya,ma,da]=isoA.split("-").map(Number), [yb,mb,db]=isoB.split("-").map(Number);
+  return Math.round((Date.UTC(yb,mb-1,db)-Date.UTC(ya,ma-1,da))/86400000);
+}
+function metaConsolidado(origem){
+  const arr=META_DAILY[origem];if(!arr)return 0;
+  return arr.reduce((a,b)=>a+b,0);
+}
+function metaAteHoje(origem){
+  const arr=META_DAILY[origem];if(!arr)return 0;
+  const dayIdx=Math.max(0,Math.min(daysBetweenISO(META_LAUNCH_START,todayISO()),arr.length-1));
+  let sum=0;for(let i=0;i<=dayIdx;i++)sum+=arr[i];
+  return sum;
+}
+
 // Chart colors
 const CHART_INV  = "#3b82f6";
 const CHART_CPL  = "#fbbf24";
@@ -1117,6 +1149,21 @@ function renderFichas(){
   const qual=S.fichasQual;
 
   const origemRowsAll=getOrigemRows(start,end,qual);
+  // Metas de fichas (até hoje / consolidado) — sempre calculadas sobre o calendário fixo
+  // do lançamento (dia 0 = 22/07/2026), independente do período selecionado no cabeçalho.
+  const _todayISO=todayISO();
+  const fichasAteHojeAll=getOrigemRows(META_LAUNCH_START,_todayISO,qual);
+  const fichasConsolidadoAll=getOrigemRows("2000-01-01","2100-01-01",qual);
+  const ateHojeMap=Object.fromEntries(fichasAteHojeAll.map(o=>[o.origem,o.fichas]));
+  const consolidadoMap=Object.fromEntries(fichasConsolidadoAll.map(o=>[o.origem,o.fichas]));
+  origemRowsAll.forEach(o=>{
+    const metaAte=metaAteHoje(o.origem), metaCons=metaConsolidado(o.origem);
+    const fichasAte=ateHojeMap[o.origem]||0, fichasCons=consolidadoMap[o.origem]||0;
+    o.metaAteHoje=metaAte;
+    o.pctAteHoje=metaAte>0?(fichasAte/metaAte)*100:0;
+    o.metaConsolidado=metaCons;
+    o.pctConsolidado=metaCons>0?(fichasCons/metaCons)*100:0;
+  });
   const _oq=S.origemSearch.trim().toLowerCase();
   const origemRows=_oq?origemRowsAll.filter(o=>o.origem.toLowerCase().includes(_oq)):origemRowsAll;
   const {col:oCol,dir:oDir}=S.oSort;
@@ -1189,18 +1236,26 @@ function renderFichas(){
           <th style="width:36px"></th>
           <th onclick="sortOrigens('origem')" style="cursor:pointer">Origem</th>
           ${thO("fichas","Quantidade de fichas")}
+          ${thO("metaAteHoje","Meta de fichas até hoje")}
+          ${thO("pctAteHoje","% de atingimento até hoje")}
+          ${thO("metaConsolidado","Meta de fichas consolidado")}
+          ${thO("pctConsolidado","% de atingimento consolidado")}
           ${thO("vendas","Quantidade de vendas")}
           ${thO("conv","Conv. ficha→venda")}
           ${thO("repres","Representatividade")}
         </tr></thead>
         <tbody>
-          ${sortedOrigens.length===0?`<tr><td colspan="6" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
+          ${sortedOrigens.length===0?`<tr><td colspan="10" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
           sortedOrigens.map(o=>{
             const sel=S.selectedOrigens.has(o.origem);
             return `<tr onclick="toggleOrigem('${escName(o.origem)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td style="text-align:center">${chkBox(sel)}</td>
               <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${o.origem}</td>
               <td class="mono" style="text-align:right">${o.fichas.toLocaleString("pt-BR")}</td>
+              <td class="mono" style="text-align:right">${o.metaAteHoje>0?o.metaAteHoje.toLocaleString("pt-BR"):"—"}</td>
+              <td style="text-align:right;color:${o.metaAteHoje>0?statusColor(o.pctAteHoje,100,true):"var(--muted)"}">${o.metaAteHoje>0?fPct(o.pctAteHoje):"—"}</td>
+              <td class="mono" style="text-align:right">${o.metaConsolidado>0?o.metaConsolidado.toLocaleString("pt-BR"):"—"}</td>
+              <td style="text-align:right;color:${o.metaConsolidado>0?statusColor(o.pctConsolidado,100,true):"var(--muted)"}">${o.metaConsolidado>0?fPct(o.pctConsolidado):"—"}</td>
               <td class="mono" style="text-align:right">${o.vendas.toLocaleString("pt-BR")}</td>
               <td class="mono" style="text-align:right">${o.fichas>0?fPct(o.conv):"—"}</td>
               <td class="mono" style="text-align:right">${fPct(o.repres)}</td>
