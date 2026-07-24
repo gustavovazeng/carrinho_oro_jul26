@@ -713,6 +713,7 @@ function passQual(tipo,qual){ return !qual||qual==="todas"||tipo===qual; }
 const ORIGEM_MAP = {
   "wp":"Whatsapp",
   "wp-antigos":"Whatsapp",
+  "wp-suporte":"Whatsapp",
   "youtube":"Youtube",
   "qrcode":"Youtube",
   "api-pvd":"API",
@@ -720,6 +721,7 @@ const ORIGEM_MAP = {
   "em,ActiveCampaign":"Email",
   "em":"Email",
   "(não informado)":"Sem UTM",
+  "xxxxx":"Sem UTM",
 };
 function normOrigem(o){
   if(o&&o.includes("FBAds"))return "Tráfego";
