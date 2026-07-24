@@ -223,86 +223,6 @@ const LISTA_LEADS_TOTAL       = 209896;    // tamanho da lista de leads deste la
 const INVESTIMENTO_ROAS_EXTRA = 1538338.58; // custo fixo somado ao investimento em mídia p/ ROAS
 // Faturamento agora usa o valor real de cada venda (coluna "Valor"), não um ticket médio fixo.
 
-// ── Metas diárias de fichas (aba Fichas) ────────────────────────────────────
-// Fonte: planejamento-fichas-oro_jul26 - fonte_ficha.csv, 3 cenários (0,9 / 0,7 / 0,5).
-// Dia 0 do lançamento = 22/07/2026. Um índice por dia (0 a 16); "Tráfego" =
-// Facebook + Google somados dia a dia. Depois do dia 16 o lançamento é
-// considerado encerrado: a meta "até hoje" trava no valor consolidado (soma
-// de todo o array), que é sempre derivada dos próprios valores diários — não
-// existe um número consolidado hardcoded solto que possa ficar inconsistente.
-const META_LAUNCH_START = "2026-07-22"; // dia 0
-const META_DAILY_BY_SCENARIO = {
-  "0.9": {
-    "Tráfego":            [39,2622,2612,3674,2861,428,281,386,330,248,200,239,228,221,193,259,2], // Facebook+Google
-    "Instagram Orgânico": [134,239,230,285,425,217,104,134,226,176,85,121,125,119,122,91,46],
-    "Youtube":            [1386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-    "Whatsapp":           [3002,3331,2300,3165,1045,653,292,361,189,216,107,138,121,88,106,77,12],
-    "Sem UTM":            [30,21,13,17,12,5,34,73,68,48,23,36,31,22,43,3,0],
-    "API":                [692,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-    "Email":              [23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  },
-  "0.7": {
-    "Tráfego":            [31,2039,2032,2858,2225,333,218,301,257,193,155,185,177,172,150,202,1], // Facebook+Google
-    "Instagram Orgânico": [108,186,179,222,330,169,81,104,176,137,66,94,97,92,95,71,36],
-    "Youtube":            [1108,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-    "Whatsapp":           [2402,2591,1789,2462,813,508,227,281,147,168,83,107,94,69,83,60,9],
-    "Sem UTM":            [24,16,10,13,9,4,27,57,53,37,18,28,24,17,34,2,0],
-    "API":                [554,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-    "Email":              [19,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  },
-  "0.5": {
-    "Tráfego":            [25,1457,1452,2041,1590,238,156,215,184,138,112,133,127,123,108,144,1], // Facebook+Google
-    "Instagram Orgânico": [86,133,128,159,236,121,58,75,126,98,47,67,70,66,68,51,26],
-    "Youtube":            [887,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-    "Whatsapp":           [1922,1851,1278,1759,581,363,162,201,105,120,60,77,67,49,59,43,7],
-    "Sem UTM":            [19,12,7,10,7,3,19,41,38,27,13,20,17,12,24,2,0],
-    "API":                [443,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-    "Email":              [15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  },
-};
-function daysBetweenISO(isoA,isoB){
-  const [ya,ma,da]=isoA.split("-").map(Number), [yb,mb,db]=isoB.split("-").map(Number);
-  return Math.round((Date.UTC(yb,mb-1,db)-Date.UTC(ya,ma-1,da))/86400000);
-}
-function metaConsolidado(origem){
-  const arr=(META_DAILY_BY_SCENARIO[S.metaScenario]||{})[origem];if(!arr)return 0;
-  return arr.reduce((a,b)=>a+b,0);
-}
-function metaAteHoje(origem){
-  const arr=(META_DAILY_BY_SCENARIO[S.metaScenario]||{})[origem];if(!arr)return 0;
-  const dayIdx=Math.max(0,Math.min(daysBetweenISO(META_LAUNCH_START,todayISO()),arr.length-1));
-  let sum=0;for(let i=0;i<=dayIdx;i++)sum+=arr[i];
-  return sum;
-}
-function addDaysISO(iso,n){
-  const [y,m,d]=iso.split("-").map(Number);
-  const dt=new Date(Date.UTC(y,m-1,d)+n*86400000);
-  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,"0")}-${String(dt.getUTCDate()).padStart(2,"0")}`;
-}
-// Fichas reais por dia (dia 0..16 do lançamento) para um conjunto de origens já
-// normalizadas (labels da tabela de Origem) somadas, junto com a meta diária (soma
-// dos META_DAILY_BY_SCENARIO[cenário atual] das mesmas origens) — usado no gráfico
-// de projeção da aba Fichas.
-function getOrigemDailyVsMeta(origensSet,qual){
-  const metaDaily=META_DAILY_BY_SCENARIO[S.metaScenario]||{};
-  const byDate={};
-  for(const f of S.fichaOrigem){
-    if(!passQual(f.tipo,qual))continue;
-    const o=normOrigem(f.origem);
-    if(!origensSet.has(o))continue;
-    byDate[f.date]=(byDate[f.date]||0)+1;
-  }
-  const nDays=Math.max(1,...[...origensSet].map(o=>(metaDaily[o]||[]).length),17);
-  const data=[];
-  for(let i=0;i<nDays;i++){
-    const date=addDaysISO(META_LAUNCH_START,i);
-    let meta=0;
-    for(const o of origensSet){ const arr=metaDaily[o]; if(arr&&arr[i]!=null)meta+=arr[i]; }
-    data.push({date,label:fDate(date),fichas:byDate[date]||0,meta});
-  }
-  return data;
-}
-
 // Chart colors
 const CHART_INV  = "#3b82f6";
 const CHART_CPL  = "#fbbf24";
@@ -337,7 +257,6 @@ const S = {
   aSort:{col:"spend",dir:"desc"},
   // aba Fichas
   fichasQual:"todas",     // 'todas' | 'traf' | 'org' — qualificação das fichas por fonte
-  metaScenario:"0.9",     // '0.9' | '0.7' | '0.5' — cenário de meta usado na aba Fichas
   selectedOrigens:new Set(),
   origemSearch:"", canalSearch:"",
   oSort:{col:"fichas",dir:"desc"},
@@ -438,14 +357,6 @@ function statusBorder(val,meta,higherIsBetter){
   if(c==="#f87171") return "rgba(248,113,113,.22)";
   return "var(--border)";
 }
-// Farol 🟢🟡🔴 a partir de um % de atingimento (100% = na meta)
-function farolEmoji(pct){
-  const c=statusColor(pct,100,true);
-  if(c==="#34d399")return "🟢";
-  if(c==="#fbbf24")return "🟡";
-  return "🔴";
-}
-
 // ── CSV parser ────────────────────────────────────────────────────────────
 function parseCSVText(text){
   const lines=text.split(/\r?\n/);
@@ -916,7 +827,6 @@ function sortAnuncios(col){
 
 // ── Cross-filtering: aba Fichas (Origem / Canal) ───────────────────────────
 function setFichasQual(q){ S.fichasQual=q; renderFichas(); }
-function setMetaScenario(v){ S.metaScenario=v; renderFichas(); }
 function toggleOrigem(name){
   if(S.selectedOrigens.has(name))S.selectedOrigens.delete(name);else S.selectedOrigens.add(name);
   renderFichas();
@@ -1094,43 +1004,6 @@ function drawBarPct(id,data,key,color,cssW,cssH){
   data.forEach((d,i)=>{if(i%step===0)ctx.fillText(d.label,xP(i),P.t+cH+18);});
 }
 
-// Barras de fichas reais por dia + linha tracejada da meta (projeção) — usado no
-// gráfico de origem(ns) selecionada(s) na aba Fichas.
-function drawBarsWithMetaLine(id,data,barKey,metaKey,barColor,lineColor,cssW,cssH){
-  const ctx=initCanvas(id,cssW,cssH);if(!ctx)return;
-  const P={t:14,r:14,b:28,l:44};
-  const cW=cssW-P.l-P.r,cH=cssH-P.t-P.b;
-  const barVals=data.map(d=>d[barKey]||0);
-  const lineVals=data.map(d=>d[metaKey]||0);
-  const maxV=Math.max(...barVals,...lineVals,1)*1.15;
-  const n=data.length;
-  const barW=Math.max(4,Math.min(22,(cW/Math.max(n,1))*0.6));
-  const xP=i=>P.l+(n>1?i/(n-1):0.5)*cW;
-  const yP=v=>P.t+cH-(v/maxV)*cH;
-  ctx.setLineDash([]);
-  for(let i=0;i<=4;i++){
-    const y=P.t+(i/4)*cH;
-    ctx.strokeStyle=GRID_C;ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(P.l+cW,y);ctx.stroke();
-    ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="right";
-    ctx.fillText(Math.round(maxV-(i/4)*maxV),P.l-4,y+3);
-  }
-  drawBars(ctx,xP,yP,P.t+cH,barVals,barColor,barW);
-  ctx.beginPath();ctx.strokeStyle=lineColor;ctx.lineWidth=2;ctx.setLineDash([5,4]);
-  lineVals.forEach((v,i)=>{ i===0?ctx.moveTo(xP(i),yP(v)):ctx.lineTo(xP(i),yP(v)); });
-  ctx.stroke();ctx.setLineDash([]);
-  const step=n>60?7:n>30?3:n>14?2:1;
-  ctx.textAlign="center";
-  barVals.forEach((v,i)=>{
-    if(v>0&&(n<=30||i%step===0)){
-      ctx.fillStyle="#e8edf6";ctx.font=`bold ${Math.min(10,Math.max(7,barW))}px 'DM Mono',monospace`;
-      ctx.fillText(v,xP(i),yP(v)-4);
-    }
-  });
-  ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";
-  data.forEach((d,i)=>{if(i%step===0)ctx.fillText(d.label,xP(i),P.t+cH+18);});
-}
-
 function setupTip(cid,tid,data,lines,padL=58,padR=12){
   const c=document.getElementById(cid),t=document.getElementById(tid);
   if(!c||!t)return;
@@ -1243,21 +1116,6 @@ function renderFichas(){
   const qual=S.fichasQual;
 
   const origemRowsAll=getOrigemRows(start,end,qual);
-  // Metas de fichas (até hoje / consolidado) — sempre calculadas sobre o calendário fixo
-  // do lançamento (dia 0 = 22/07/2026), independente do período selecionado no cabeçalho.
-  const _todayISO=todayISO();
-  const fichasAteHojeAll=getOrigemRows(META_LAUNCH_START,_todayISO,qual);
-  const fichasConsolidadoAll=getOrigemRows("2000-01-01","2100-01-01",qual);
-  const ateHojeMap=Object.fromEntries(fichasAteHojeAll.map(o=>[o.origem,o.fichas]));
-  const consolidadoMap=Object.fromEntries(fichasConsolidadoAll.map(o=>[o.origem,o.fichas]));
-  origemRowsAll.forEach(o=>{
-    const metaAte=metaAteHoje(o.origem), metaCons=metaConsolidado(o.origem);
-    const fichasAte=ateHojeMap[o.origem]||0, fichasCons=consolidadoMap[o.origem]||0;
-    o.metaAteHoje=metaAte;
-    o.pctAteHoje=metaAte>0?(fichasAte/metaAte)*100:0;
-    o.metaConsolidado=metaCons;
-    o.pctConsolidado=metaCons>0?(fichasCons/metaCons)*100:0;
-  });
   const _oq=S.origemSearch.trim().toLowerCase();
   const origemRows=_oq?origemRowsAll.filter(o=>o.origem.toLowerCase().includes(_oq)):origemRowsAll;
   const {col:oCol,dir:oDir}=S.oSort;
@@ -1279,21 +1137,6 @@ function renderFichas(){
 
   const tot=origemRowsAll.reduce((a,o)=>({fichas:a.fichas+o.fichas,vendas:a.vendas+o.vendas}),{fichas:0,vendas:0});
   const totConv=tot.fichas>0?(tot.vendas/tot.fichas)*100:0;
-  // Totais de meta (sempre sobre TODAS as origens, ignorando a busca) — soma dos valores
-  // reais e das metas de cada origem, não uma média das porcentagens já calculadas.
-  const totFichasAteHoje=origemRowsAll.reduce((a,o)=>a+(ateHojeMap[o.origem]||0),0);
-  const totMetaAteHoje=origemRowsAll.reduce((a,o)=>a+o.metaAteHoje,0);
-  const totPctAteHoje=totMetaAteHoje>0?(totFichasAteHoje/totMetaAteHoje)*100:0;
-  const totFichasConsolidado=origemRowsAll.reduce((a,o)=>a+(consolidadoMap[o.origem]||0),0);
-  const totMetaConsolidado=origemRowsAll.reduce((a,o)=>a+o.metaConsolidado,0);
-  const totPctConsolidado=totMetaConsolidado>0?(totFichasConsolidado/totMetaConsolidado)*100:0;
-
-  // Fichas por dia × meta (projeção), abaixo da tabela de Canal — com origem(ns)
-  // selecionada(s), ou o total (todas as origens com meta) quando nada selecionado.
-  const hasOrigemSel=S.selectedOrigens.size>0;
-  const origensParaGrafico=hasOrigemSel?S.selectedOrigens:new Set(Object.keys(META_DAILY_BY_SCENARIO[S.metaScenario]||{}));
-  const origemChartData=getOrigemDailyVsMeta(origensParaGrafico,qual);
-  const origemChartTitle=hasOrigemSel?[...S.selectedOrigens].join(", "):"Total";
 
   function thO(colKey,lbl){
     const active=oCol===colKey;
@@ -1315,17 +1158,8 @@ function renderFichas(){
     </div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
 
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-      <span style="font-size:11px;color:var(--hint)">Definir meta:</span>
-      <div class="presets">
-        <button class="btn-pre${S.metaScenario==="0.9"?" on":""}" onclick="setMetaScenario('0.9')">0,9</button>
-        <button class="btn-pre${S.metaScenario==="0.7"?" on":""}" onclick="setMetaScenario('0.7')">0,7</button>
-        <button class="btn-pre${S.metaScenario==="0.5"?" on":""}" onclick="setMetaScenario('0.5')">0,5</button>
-      </div>
-    </div>
-
     <div class="g3" style="margin-bottom:20px">
-      ${kpiCard("Fichas",tot.fichas.toLocaleString("pt-BR"),`meta até hoje: ${totMetaAteHoje>0?totMetaAteHoje.toLocaleString("pt-BR"):"—"}`,totMetaAteHoje>0?statusColor(totPctAteHoje,100,true):"var(--text-strong)")}
+      ${kpiCard("Fichas",tot.fichas.toLocaleString("pt-BR"),"","var(--text-strong)")}
       ${kpiCard("Vendas",tot.vendas.toLocaleString("pt-BR"),"","var(--text-strong)")}
       ${kpiCard("Conversão de ficha em venda",fPct(totConv),"","var(--text-strong)")}
     </div>
@@ -1345,26 +1179,18 @@ function renderFichas(){
           <th style="width:36px"></th>
           <th onclick="sortOrigens('origem')" style="cursor:pointer">Origem</th>
           ${thO("fichas","Quantidade de fichas")}
-          ${thO("metaAteHoje","Meta de fichas até hoje")}
-          ${thO("pctAteHoje","% de atingimento até hoje")}
-          ${thO("metaConsolidado","Meta de fichas consolidado")}
-          ${thO("pctConsolidado","% de atingimento consolidado")}
           ${thO("vendas","Quantidade de vendas")}
           ${thO("conv","Conv. ficha→venda")}
           ${thO("repres","Representatividade")}
         </tr></thead>
         <tbody>
-          ${sortedOrigens.length===0?`<tr><td colspan="10" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
+          ${sortedOrigens.length===0?`<tr><td colspan="6" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
           sortedOrigens.map(o=>{
             const sel=S.selectedOrigens.has(o.origem);
             return `<tr onclick="toggleOrigem('${escName(o.origem)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td style="text-align:center">${chkBox(sel)}</td>
               <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${o.origem}</td>
               <td class="mono" style="text-align:right">${o.fichas.toLocaleString("pt-BR")}</td>
-              <td class="mono" style="text-align:right">${o.metaAteHoje>0?o.metaAteHoje.toLocaleString("pt-BR"):"—"}</td>
-              <td style="text-align:right;color:${o.metaAteHoje>0?statusColor(o.pctAteHoje,100,true):"var(--muted)"}">${o.metaAteHoje>0?fPct(o.pctAteHoje):"—"}</td>
-              <td class="mono" style="text-align:right">${o.metaConsolidado>0?o.metaConsolidado.toLocaleString("pt-BR"):"—"}</td>
-              <td style="text-align:right;color:${o.metaConsolidado>0?statusColor(o.pctConsolidado,100,true):"var(--muted)"}">${o.metaConsolidado>0?fPct(o.pctConsolidado):"—"}</td>
               <td class="mono" style="text-align:right">${o.vendas.toLocaleString("pt-BR")}</td>
               <td class="mono" style="text-align:right">${o.fichas>0?fPct(o.conv):"—"}</td>
               <td class="mono" style="text-align:right">${fPct(o.repres)}</td>
@@ -1375,10 +1201,6 @@ function renderFichas(){
             <td></td>
             <td style="font-weight:700;color:var(--text-strong)">Total</td>
             <td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${tot.fichas.toLocaleString("pt-BR")}</td>
-            <td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${totMetaAteHoje>0?totMetaAteHoje.toLocaleString("pt-BR"):"—"}</td>
-            <td style="text-align:right;font-weight:700;color:${totMetaAteHoje>0?statusColor(totPctAteHoje,100,true):"var(--muted)"}">${totMetaAteHoje>0?fPct(totPctAteHoje):"—"}</td>
-            <td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${totMetaConsolidado>0?totMetaConsolidado.toLocaleString("pt-BR"):"—"}</td>
-            <td style="text-align:right;font-weight:700;color:${totMetaConsolidado>0?statusColor(totPctConsolidado,100,true):"var(--muted)"}">${totMetaConsolidado>0?fPct(totPctConsolidado):"—"}</td>
             <td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${tot.vendas.toLocaleString("pt-BR")}</td>
             <td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${tot.fichas>0?fPct(totConv):"—"}</td>
             <td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${tot.fichas>0?"100,00%":"—"}</td>
@@ -1418,24 +1240,7 @@ function renderFichas(){
       </table>
       </div>
     </div>
-    <div class="cc" style="position:relative;margin-top:16px">
-      <div class="ch">
-        <span class="ct">Fichas por dia — ${origemChartTitle}</span>
-        <div class="lg">
-          <span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Fichas reais</span>
-          <span class="li"><span class="ll" style="background:${CHART_CPL};opacity:.5;border-top:1px dashed ${CHART_CPL}"></span>Meta (projeção)</span>
-        </div>
-      </div>
-      <div style="position:relative"><canvas id="c-origem-meta"></canvas><div class="tip" id="t-origem-meta"></div></div>
-    </div>
     <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
-  requestAnimationFrame(()=>{
-    const box=document.getElementById("c-origem-meta")?.parentElement;
-    if(box)drawBarsWithMetaLine("c-origem-meta",origemChartData,"fichas","meta",CHART_TRAF,CHART_CPL,box.clientWidth,220);
-    setupTip("c-origem-meta","t-origem-meta",origemChartData,[
-      {name:"Fichas reais",color:CHART_TRAF,key:"fichas",fmt:v=>String(v)},
-      {name:"Meta (projeção)",color:CHART_CPL,key:"meta",fmt:v=>String(v)}],44,14);
-  });
 }
 
 // ── Render: Campanhas / Anúncios ──────────────────────────────────────────
