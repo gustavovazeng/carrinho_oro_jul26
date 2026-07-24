@@ -1167,9 +1167,9 @@ function renderFichas(){
           <th style="width:36px"></th>
           <th onclick="sortOrigens('origem')" style="cursor:pointer">Origem</th>
           ${thO("fichas","Quantidade de fichas")}
-          ${thO("repres","Representatividade")}
           ${thO("vendas","Quantidade de vendas")}
           ${thO("conv","Conv. ficha→venda")}
+          ${thO("repres","Representatividade")}
         </tr></thead>
         <tbody>
           ${sortedOrigens.length===0?`<tr><td colspan="6" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
@@ -1179,9 +1179,9 @@ function renderFichas(){
               <td style="text-align:center">${chkBox(sel)}</td>
               <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${o.origem}</td>
               <td class="mono" style="text-align:right">${o.fichas.toLocaleString("pt-BR")}</td>
-              <td class="mono" style="text-align:right">${fPct(o.repres)}</td>
               <td class="mono" style="text-align:right">${o.vendas.toLocaleString("pt-BR")}</td>
               <td class="mono" style="text-align:right">${o.fichas>0?fPct(o.conv):"—"}</td>
+              <td class="mono" style="text-align:right">${fPct(o.repres)}</td>
             </tr>`;
           }).join("")}
         </tbody>
