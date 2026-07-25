@@ -1231,6 +1231,13 @@ function renderFichas(){
   const tot=origemRowsAll.reduce((a,o)=>({fichas:a.fichas+o.fichas,vendas:a.vendas+o.vendas}),{fichas:0,vendas:0});
   const totConv=tot.fichas>0?(tot.vendas/tot.fichas)*100:0;
 
+  // Volume de fichas duplicadas — sempre comparando totais × únicas no período (independe
+  // do seletor "Totais/Únicas" acima, que só decide o que as tabelas/gráfico usam).
+  const totFichasAll=getOrigemRows(S.fichaOrigem,start,end,qual).reduce((a,o)=>a+o.fichas,0);
+  const totFichasUnicas=getOrigemRows(S.fichaOrigemUnica,start,end,qual).reduce((a,o)=>a+o.fichas,0);
+  const fichasDuplicadas=totFichasAll-totFichasUnicas;
+  const pctDuplicadas=totFichasAll>0?(fichasDuplicadas/totFichasAll)*100:0;
+
   // Gráfico "Fichas por dia" — mostra só a(s) origem(ns)/canal(is) selecionado(s), ou o
   // total geral quando nada está selecionado.
   const fichasPorDia=getFichasPorDia(fichasSrc,start,end,qual,S.selectedOrigens,S.selectedCanais);
@@ -1266,10 +1273,11 @@ function renderFichas(){
       <span style="font-size:10px;color:var(--hint)">${S.fichasMode==="unicas"?"deduplicadas por telefone/e-mail — considera só a 1ª ficha de cada pessoa":"toda ficha preenchida conta, mesmo repetida"}</span>
     </div>
 
-    <div class="g3" style="margin-bottom:20px">
+    <div class="g4" style="margin-bottom:20px">
       ${kpiCard("Fichas",tot.fichas.toLocaleString("pt-BR"),"","var(--text-strong)")}
       ${kpiCard("Vendas",tot.vendas.toLocaleString("pt-BR"),"","var(--text-strong)")}
       ${kpiCard("Conversão de ficha em venda",fPct(totConv),"","var(--text-strong)")}
+      ${kpiCard("Volume de fichas duplicadas",fPct(pctDuplicadas),`${fichasDuplicadas.toLocaleString("pt-BR")} fichas`,"var(--text-strong)")}
     </div>
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
