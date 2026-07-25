@@ -238,7 +238,8 @@ const S = {
   vendaAttrib:[],        // vendas de tráfego casadas com anúncio/campanha: {date,adName,campName,valor}
   fichaOrigem:[],        // todas as fichas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal}
   vendaOrigem:[],        // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor}
-  trafego:{},            // date → count (fichas tráfego)
+  trafego:{},            // date → count (fichas tráfego, totais: com+sem preço)
+  trafegoComPreco:{},    // date → count (fichas tráfego que responderam alguma das perguntas de valor)
   organico:{},           // date → count (fichas orgânico)
   vendasTraf:{},         // date → count (vendas casadas com fichas de tráfego)
   vendasOrg:{},          // date → count (vendas casadas com fichas de orgânico)
@@ -429,11 +430,40 @@ async function loadData(){
     const orgRows     = [...parseSheet(dispJ), ...parseSheet(orgJ)];
     const vendasRows  = vendasJ ? parseSheet(vendasJ) : []; // zerado até termos o gid da aba de vendas
 
+    // ── Fichas de Tráfego: "com preço" × "totais" ──────────────────────────
+    // O formulário de tráfego tem duas perguntas de valor mutuamente exclusivas
+    // (quem responde uma não responde a outra — normal). Só que começaram a
+    // chegar fichas em que NENHUMA das duas foi respondida — envios incompletos
+    // que a automação sincroniza mesmo assim, sem "Submitted At" real (chega
+    // como 01/01/0001 00:00:00). A classificação "com preço"/"sem preço" é
+    // sempre feita pelas duas colunas de resposta (não pelo formato da data —
+    // isso está sendo corrigido na origem e "sem preço" vai continuar
+    // acontecendo mesmo com data válida no futuro).
+    const trafHeaders=trafRows.length?Object.keys(trafRows[0]):[];
+    const KEY_PRECO_2X=trafHeaders.find(h=>h.startsWith("O valor das duas assinaturas"));
+    const KEY_PRECO_1X=trafHeaders.find(h=>h.startsWith("O valor da Aliança Divergente é de R$ 2.480"));
+    function temPreco(r){
+      if(!KEY_PRECO_2X&&!KEY_PRECO_1X)return true; // colunas não encontradas — não filtra nada
+      return !!(KEY_PRECO_2X&&(r[KEY_PRECO_2X]||"").trim())||!!(KEY_PRECO_1X&&(r[KEY_PRECO_1X]||"").trim());
+    }
+    // Fichas "sem preço" não têm data confiável — herdam data/hora da ficha "com
+    // preço" anterior mais próxima (ordem da planilha = ordem de envio; se a de
+    // cima também for sem preço, sobe mais uma, e assim por diante).
+    let lastGoodMs=null;
+    const trafResolved=trafRows.map(r=>{
+      const comPreco=temPreco(r);
+      const rawMs=parseDateTimeMs(r["Submitted At"]);
+      const ms=comPreco?rawMs:lastGoodMs;
+      if(comPreco)lastGoodMs=rawMs;
+      return{r,comPreco,ms};
+    });
     // ── Fichas: Tráfego (data já ajustada -3h) ──
-    const trafD={};
-    for(const r of trafRows){
-      const d=toISOFicha(r["Submitted At"]);if(!d)continue;
+    const trafD={}, trafDComPreco={};
+    for(const{comPreco,ms} of trafResolved){
+      if(ms==null)continue;
+      const d=msToISO(ms-3*60*60*1000);
       trafD[d]=(trafD[d]||0)+1;
+      if(comPreco)trafDComPreco[d]=(trafDComPreco[d]||0)+1;
     }
     // ── Fichas: Orgânico (data já ajustada -3h) ──
     const orgD={};
@@ -488,9 +518,8 @@ async function loadData(){
       if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]=rec;
       if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]=rec;
     }
-    for(const r of trafRows){
-      const d=toISOFicha(r["Submitted At"]);
-      const ms=parseDateTimeMs(r["Submitted At"]);
+    for(const{r,ms} of trafResolved){
+      const d=ms!=null?msToISO(ms-3*60*60*1000):null;
       // Alguns cliques chegam com o macro do Meta não substituído, ex:
       // "{{campaign.name}}_id_{{campaign.id}}" / "{{ad.name}}_id_{{ad.id}}" —
       // isso não é um nome de campanha/anúncio real, então tratamos como se
@@ -568,7 +597,7 @@ async function loadData(){
       }
     }
 
-    S.trafego=trafD; S.organico=orgD;
+    S.trafego=trafD; S.trafegoComPreco=trafDComPreco; S.organico=orgD;
     S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib; S.vendaAttrib=vendaAttrib;
     S.fichaOrigem=fichaOrigem; S.vendaOrigem=vendaOrigem;
     S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched; S.vendasFaturamento=vFaturamento;
@@ -591,37 +620,41 @@ function getDaily(start,end){
   return Array.from(allDates).sort().filter(d=>d>=start&&d<=end).map(date=>{
     const m=S.meta[date]||{spend:0};
     const traf=S.trafego[date]||0;
+    const trafComPreco=S.trafegoComPreco[date]||0;
     const org=S.organico[date]||0;
-    return{date,label:fDate(date),spend:m.spend||0,trafficLeads:traf,organicLeads:org,
-      cpl:traf>0?(m.spend||0)/traf:0};
+    return{date,label:fDate(date),spend:m.spend||0,trafficLeads:traf,trafficLeadsComPreco:trafComPreco,organicLeads:org,
+      cpl:trafComPreco>0?(m.spend||0)/trafComPreco:0};
   });
 }
 function getTotals(daily){
   return daily.reduce((a,d)=>({
     spend:a.spend+d.spend,
     trafficLeads:a.trafficLeads+d.trafficLeads,
+    trafficLeadsComPreco:a.trafficLeadsComPreco+d.trafficLeadsComPreco,
     organicLeads:a.organicLeads+d.organicLeads,
-  }),{spend:0,trafficLeads:0,organicLeads:0});
+  }),{spend:0,trafficLeads:0,trafficLeadsComPreco:0,organicLeads:0});
 }
 // s,e = null → todo o período (all-time)
 function periodTotals(s,e){
   const dates=new Set([...Object.keys(S.trafego),...Object.keys(S.organico),...Object.keys(S.meta)]);
-  let traf=0,org=0,spend=0,clicks=0,impressions=0,landingViews=0;
+  let traf=0,trafComPreco=0,org=0,spend=0,clicks=0,impressions=0,landingViews=0;
   for(const d of dates){
     if(s!==null&&d<s)continue;
     if(e!==null&&d>e)continue;
     traf+=S.trafego[d]||0;
+    trafComPreco+=S.trafegoComPreco[d]||0;
     org+=S.organico[d]||0;
     const m=S.meta[d];
     if(m){ spend+=m.spend||0; clicks+=m.clicks||0; impressions+=m.impressions||0; landingViews+=m.landingViews||0; }
   }
-  return{traf,org,spend,clicks,impressions,landingViews,
-    cpl:traf>0?spend/traf:0,
+  return{traf,trafComPreco,org,spend,clicks,impressions,landingViews,
+    cpl:trafComPreco>0?spend/trafComPreco:0,       // Custo/ficha com preço (tem meta definida)
+    cplTotal:traf>0?spend/traf:0,                   // Custo/ficha total (com+sem preço)
     cpc:clicks>0?spend/clicks:0,
     ctr:impressions>0?(clicks/impressions)*100:0,
     cpm:impressions>0?(spend/impressions)*1000:0,
-    // Tx conversão formulário = fichas reais de tráfego / page views da landing
-    txForm:landingViews>0?(traf/landingViews)*100:0};
+    // Tx conversão formulário = fichas com preço / page views da landing
+    txForm:landingViews>0?(trafComPreco/landingViews)*100:0};
 }
 // ── Campanhas / Anúncios: agregação com cross-filtering ───────────────────
 function getMetaRowsInRange(start,end){
@@ -1047,23 +1080,27 @@ function renderPrincipal(){
   const el=document.getElementById("page-principal");if(!el)return;
   const daily=getDaily(S.startDate,S.endDate);
   const tot=getTotals(daily);
-  const cpl=tot.trafficLeads>0?tot.spend/tot.trafficLeads:0;
+  const cpl=tot.trafficLeadsComPreco>0?tot.spend/tot.trafficLeadsComPreco:0;
+  const cplTotal=tot.trafficLeads>0?tot.spend/tot.trafficLeads:0;
   const cplC=statusColor(cpl,META_CPL,false);
   el.innerHTML=`
     <div class="hdr" style="margin-bottom:6px">
       <div>
         <div class="hdr-title">ORO — Carrinho</div>
-        <div class="hdr-sub">atualizado em: ${S.updated||"—"}${daily.length>0?` · ${daily.length} dias no período`:""}</div>
+        <div class="hdr-sub">atualizado em: ${S.updated||"—"}${daily.length>0?` · ${daily.length} dias no período`:""} · "com preço" = respondeu a pergunta de valor/pagamento</div>
       </div>
       <div style="display:flex;align-items:center;gap:16px">${statusLegend()}</div>
     </div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
-    <div class="g5" style="margin-bottom:16px">
+    <div class="g3" style="margin-bottom:13px">
       ${kpiCard("Investimento",fBRL(tot.spend),"","var(--text-strong)")}
-      ${kpiCard("Fichas tráfego",tot.trafficLeads.toLocaleString("pt-BR"),"","var(--text-strong)")}
+      ${kpiCard("Fichas tráfego (com preço)",tot.trafficLeadsComPreco.toLocaleString("pt-BR"),"","var(--text-strong)")}
+      ${kpiCard("Fichas tráfego (totais)",tot.trafficLeads.toLocaleString("pt-BR"),"","var(--text-strong)")}
+    </div>
+    <div class="g3" style="margin-bottom:16px">
       ${kpiCard("Fichas orgânico",tot.organicLeads.toLocaleString("pt-BR"),"","var(--text-strong)")}
-      ${kpiCard("Fichas total",(tot.trafficLeads+tot.organicLeads).toLocaleString("pt-BR"),"","var(--text-strong)")}
-      ${kpiCard("Custo/ficha (tráfego)",tot.trafficLeads>0?fBRL(cpl):"—",`meta ${fBRL(META_CPL)}`,cplC,false,cpl,META_CPL,false)}
+      ${kpiCard("Custo/ficha com preço",tot.trafficLeadsComPreco>0?fBRL(cpl):"—",`meta ${fBRL(META_CPL)}`,cplC,false,cpl,META_CPL,false)}
+      ${kpiCard("Custo/ficha total",tot.trafficLeads>0?fBRL(cplTotal):"—","","var(--text-strong)")}
     </div>
     <div class="cc" style="margin-bottom:12px;position:relative">
       <div class="ch">
@@ -1540,6 +1577,7 @@ function renderResumo(){
   const el=document.getElementById("page-resumo");if(!el)return;
   const _fid=document.activeElement?.id; // capturar antes do innerHTML destruir o foco
   const today=todayISO(), yest=yesterdayISO();
+  const per=getCurrentPeriod();
 
   const ontem=periodTotals(yest,yest);
   const hojeRaw=periodTotals(today,today); // valor "cru" vindo da Base Meta, antes de qualquer override manual
@@ -1549,20 +1587,28 @@ function renderResumo(){
   // (CPC/CPM ficam estáticos, com base no investimento bruto da Base Meta — só Custo/ficha recalcula)
   const hoje=isManual
     ? {...hojeRaw, spend:S.manualSpendHoje,
-        cpl:hojeRaw.traf>0?S.manualSpendHoje/hojeRaw.traf:0}
+        cpl:hojeRaw.trafComPreco>0?S.manualSpendHoje/hojeRaw.trafComPreco:0,
+        cplTotal:hojeRaw.traf>0?S.manualSpendHoje/hojeRaw.traf:0}
     : hojeRaw;
 
-  // "Total - Consolidado": soma tudo, mas troca a fatia de "hoje" pelo valor manual quando houver override
-  // (CPC/CPM do consolidado também ficam estáticos, com base no investimento bruto)
-  let tot=periodTotals(null,null);
+  // "Total - Consolidado": soma o período selecionado no cabeçalho (mesmo filtro usado nas
+  // demais abas — Principal, Fichas, Campanhas/Anúncios), não a planilha inteira. Antes somava
+  // tudo (periodTotals(null,null)), o que incluía qualquer dado fora do período selecionado e
+  // fazia o total daqui divergir do que aparecia na aba Principal para o mesmo período.
+  // Troca a fatia de "hoje" pelo valor manual quando houver override (CPC/CPM do consolidado
+  // também ficam estáticos, com base no investimento bruto).
+  let tot=periodTotals(S.startDate,S.endDate);
   if(isManual){
     const adjSpend=tot.spend-hojeRaw.spend+S.manualSpendHoje;
     tot={...tot, spend:adjSpend,
-      cpl:tot.traf>0?adjSpend/tot.traf:0};
+      cpl:tot.trafComPreco>0?adjSpend/tot.trafComPreco:0,
+      cplTotal:tot.traf>0?adjSpend/tot.traf:0};
   }
 
+  // Farol do Custo/ficha usa sempre "fichas com preço" (é a métrica que tem meta definida —
+  // R$45). "Fichas totais" (com+sem preço) não tem farol/meta, é só informativo.
   function cplInfo(m,isHoje){
-    if(!m.traf) return {txt:isHoje?"--!":"--", emoji:"🔴"};
+    if(!m.trafComPreco) return {txt:isHoje?"--!":"--", emoji:"🔴"};
     const ratio=META_CPL/m.cpl;
     let emoji="🔴";
     if(ratio>=1)emoji="🟢";else if(ratio>=0.85)emoji="🟡";
@@ -1613,10 +1659,12 @@ function renderResumo(){
         <span style="font-size:13px;font-weight:700;color:var(--text-strong)">${title}</span>
         ${dateLbl?`<span style="font-size:11px;color:var(--hint);font-family:'JetBrains Mono',monospace">${dateLbl}</span>`:""}
       </div>
-      ${row("Fichas (tráfego)",m.traf,"","")}
-      <div style="height:6px"></div>
+      ${row("Fichas com preço",m.trafComPreco,"","")}
       ${isHoje?investRowHoje():row("Investimento",fBRL(m.spend),"","")}
-      ${row("Custo/ficha",c.txt,`meta ${fBRL(META_CPL)}`,c.emoji)}
+      ${row("Custo/ ficha com preço",c.txt,`meta ${fBRL(META_CPL)}`,c.emoji)}
+      <div style="height:6px"></div>
+      ${row("Fichas totais",m.traf,"","")}
+      ${row("Custo/ficha total",m.traf>0?fBRL(m.cplTotal):"—","","")}
       <div style="height:10px"></div>
       ${row("CPC",fBRL(m.cpc),metaStr(METAS_RESUMO.cpc,false),metaEmoji(m.cpc,METAS_RESUMO.cpc))}
       ${row("CTR",fPct(m.ctr),metaStr(METAS_RESUMO.ctr,true),metaEmoji(m.ctr,METAS_RESUMO.ctr))}
@@ -1629,10 +1677,13 @@ function renderResumo(){
   function textBlock(label,m,dateLbl,c){
     return `${label}${dateLbl?`\t${dateLbl}`:""}
 
-Fichas:\t${m.traf}
+Fichas com preço:\t${m.trafComPreco}
 
 Investimento:\t${fBRL(m.spend)}
-Custo/ ficha:\t${c.txt}\t${c.emoji} (meta: ${fBRL(META_CPL)})
+Custo/ ficha com preço:\t${c.txt}\t${c.emoji} (meta: ${fBRL(META_CPL)})
+
+Fichas totais:\t${m.traf}
+Custo/ficha total:\t${m.traf>0?fBRL(m.cplTotal):"—"}
 
 CPC:\t${fBRL(m.cpc)}
 CTR:\t${fPct(m.ctr)}
@@ -1652,7 +1703,7 @@ ${textBlock("Hoje",hoje,fDateBR(today),ch_)}`;
     <div class="hdr" style="margin-bottom:16px">
       <div>
         <div class="hdr-title">Resumo diário</div>
-        <div class="hdr-sub">oro_jul26 · Carrinho · ontem: ${fDateBR(yest)} · hoje: ${fDateBR(today)} · considera apenas fichas de tráfego</div>
+        <div class="hdr-sub">oro_jul26 · Carrinho · ontem: ${fDateBR(yest)} · hoje: ${fDateBR(today)} · considera apenas fichas de tráfego · "com preço" = respondeu a pergunta de valor/pagamento</div>
       </div>
       <button onclick="copyResumo()" class="btn-copy-resumo" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">
         📋 Copiar resumo
@@ -1661,7 +1712,7 @@ ${textBlock("Hoje",hoje,fDateBR(today),ch_)}`;
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     <div style="display:grid;grid-template-columns:1fr 420px;gap:20px;align-items:start">
       <div>
-        ${block("📶 Total - Consolidado",tot,false)}
+        ${block("📶 Total - Consolidado",tot,false,per.s&&per.e?`${fDateBR(per.s)} → ${fDateBR(per.e)}`:"")}
         ${block("⬅️ Ontem",ontem,false,fDateBR(yest))}
         ${block("⬇️ Hoje",hoje,true,fDateBR(today))}
       </div>
