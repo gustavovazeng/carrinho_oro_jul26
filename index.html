@@ -521,7 +521,7 @@ async function loadData(){
       if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]=rec;
       if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]=rec;
     }
-    for(const{r,ms} of trafResolved){
+    for(const{r,ms,comPreco} of trafResolved){
       const d=ms!=null?msToISO(ms-3*60*60*1000):null;
       // Alguns cliques chegam com o macro do Meta não substituído, ex:
       // "{{campaign.name}}_id_{{campaign.id}}" / "{{ad.name}}_id_{{ad.id}}" —
@@ -546,7 +546,9 @@ async function loadData(){
       }
       const trafPhone=normalizePhone(r["Qual seu WhatsApp?"]), trafEmail=normalizeEmail(r["Qual seu e-mail?"]);
       noteFicha("traf",trafPhone,trafEmail,ms,adName,campName,utmSrc,utmMed);
-      if(d&&(adName||campName)){
+      // Campanhas/Anúncios só conta ficha "com preço" (respondeu a pergunta de valor) —
+      // fichas "sem preço" são envios incompletos e não entram no fichaAttrib.
+      if(d&&comPreco&&(adName||campName)){
         fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)"});
       }
       if(d)fichaOrigem.push({date:d,ms,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:trafPhone,email:trafEmail});
@@ -1167,6 +1169,13 @@ function renderPrincipal(){
     </div>
     <div class="cc" style="position:relative;margin-bottom:12px">
       <div class="ch">
+        <span class="ct">Fichas com preço por dia — Tráfego</span>
+        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Fichas/dia</span></div>
+      </div>
+      <div style="position:relative"><canvas id="c-traf-preco"></canvas><div class="tip" id="t-traf-preco"></div></div>
+    </div>
+    <div class="cc" style="position:relative;margin-bottom:12px">
+      <div class="ch">
         <span class="ct">Fichas por dia — Tráfego</span>
         <div class="lg"><span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Fichas/dia</span></div>
       </div>
@@ -1184,6 +1193,8 @@ function renderPrincipal(){
   requestAnimationFrame(()=>{
     const box1=document.getElementById("c-dual")?.parentElement;
     if(box1)drawDualInvCpl("c-dual",daily,box1.clientWidth,220);
+    const boxP=document.getElementById("c-traf-preco")?.parentElement;
+    if(boxP)drawBarSingle("c-traf-preco",daily,"trafficLeadsComPreco",CHART_TRAF,boxP.clientWidth,200);
     const box2=document.getElementById("c-traf")?.parentElement;
     if(box2)drawBarSingle("c-traf",daily,"trafficLeads",CHART_TRAF,box2.clientWidth,200);
     const box3=document.getElementById("c-org")?.parentElement;
@@ -1191,6 +1202,7 @@ function renderPrincipal(){
     setupTip("c-dual","t-dual",daily,[
       {name:"Investimento",color:CHART_INV,key:"spend",fmt:fBRL},
       {name:"Custo/ficha",color:CHART_CPL,key:"cpl",fmt:fBRL}]);
+    setupTip("c-traf-preco","t-traf-preco",daily,[{name:"Fichas com preço",color:CHART_TRAF,key:"trafficLeadsComPreco",fmt:v=>String(v)}],40,12);
     setupTip("c-traf","t-traf",daily,[{name:"Fichas tráfego",color:CHART_TRAF,key:"trafficLeads",fmt:v=>String(v)}],40,12);
     setupTip("c-org","t-org",daily,[{name:"Fichas orgânico",color:CHART_ORG,key:"organicLeads",fmt:v=>String(v)}],40,12);
   });
