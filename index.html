@@ -236,7 +236,8 @@ const S = {
   adIdMap:{},            // adId → {adName,campName,campId,igUrl} (fonte da verdade p/ casar fichas)
   fichaAttrib:[],        // fichas de tráfego casadas com anúncio/campanha: {date,adName,campName}
   vendaAttrib:[],        // vendas de tráfego casadas com anúncio/campanha: {date,adName,campName,valor}
-  fichaOrigem:[],        // todas as fichas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal}
+  fichaOrigem:[],        // todas as fichas (tráfego+orgânico) com origem/canal: {date,ms,tipo,origem,canal,phone,email}
+  fichaOrigemUnica:[],   // fichas deduplicadas por telefone/e-mail (só a mais antiga por pessoa)
   vendaOrigem:[],        // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor}
   trafego:{},            // date → count (fichas tráfego, totais: com+sem preço)
   trafegoComPreco:{},    // date → count (fichas tráfego que responderam alguma das perguntas de valor)
@@ -258,7 +259,9 @@ const S = {
   aSort:{col:"spend",dir:"desc"},
   // aba Fichas
   fichasQual:"todas",     // 'todas' | 'traf' | 'org' — qualificação das fichas por fonte
+  fichasMode:"totais",    // 'totais' | 'unicas' — fichas únicas deduplicadas por telefone/e-mail
   selectedOrigens:new Set(),
+  selectedCanais:new Set(),
   origemSearch:"", canalSearch:"",
   oSort:{col:"fichas",dir:"desc"},
   mSort:{col:"fichas",dir:"desc"},
@@ -509,7 +512,7 @@ async function loadData(){
     // orgânico) — usados tanto para casar vendas quanto (no caso do tráfego) pra
     // saber de qual anúncio/campanha essa ficha veio.
     const fichaAttrib=[];
-    const fichaOrigem=[]; // TODAS as fichas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal}
+    const fichaOrigem=[]; // TODAS as fichas (tráfego+orgânico) com origem/canal: {date,ms,tipo,origem,canal,phone,email}
     const earliestByPhone={}, earliestByEmail={};
     function noteFicha(type,phone,email,ms,adName,campName,origem,canal){
       if(ms==null)return;
@@ -541,19 +544,45 @@ async function loadData(){
         adName=adIdMap[rawAdId].adName||rawAdName;
         campName=adIdMap[rawAdId].campName||rawCampName;
       }
-      noteFicha("traf",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),ms,adName,campName,utmSrc,utmMed);
+      const trafPhone=normalizePhone(r["Qual seu WhatsApp?"]), trafEmail=normalizeEmail(r["Qual seu e-mail?"]);
+      noteFicha("traf",trafPhone,trafEmail,ms,adName,campName,utmSrc,utmMed);
       if(d&&(adName||campName)){
         fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)"});
       }
-      if(d)fichaOrigem.push({date:d,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)"});
+      if(d)fichaOrigem.push({date:d,ms,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:trafPhone,email:trafEmail});
     }
     for(const r of orgRows){
       const d=toISOFicha(r["Submitted At"]);
+      const orgMs=parseDateTimeMs(r["Submitted At"]);
       const utmSrc=(r["utm_source"]||"").trim();
       const utmMed=(r["utm_medium"]||"").trim();
-      noteFicha("org",normalizePhone(r["Qual seu WhatsApp?"]),normalizeEmail(r["Qual seu e-mail?"]),parseDateTimeMs(r["Submitted At"]),null,null,utmSrc,utmMed);
-      if(d)fichaOrigem.push({date:d,tipo:"org",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)"});
+      const orgPhone=normalizePhone(r["Qual seu WhatsApp?"]), orgEmail=normalizeEmail(r["Qual seu e-mail?"]);
+      noteFicha("org",orgPhone,orgEmail,orgMs,null,null,utmSrc,utmMed);
+      if(d)fichaOrigem.push({date:d,ms:orgMs,tipo:"org",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:orgPhone,email:orgEmail});
     }
+
+    // ── Fichas únicas: dedup por telefone OU e-mail (se qualquer um dos dois bater
+    // entre duas fichas, é a mesma pessoa) — mantém sempre a ficha mais antiga (a
+    // primeira que a pessoa preencheu, em qualquer canal/origem). Union-Find: cada
+    // ficha vira um nó ligado ao seu telefone e ao seu e-mail; fichas que
+    // compartilham qualquer um dos dois caem no mesmo grupo.
+    function dedupFichas(fichas){
+      const parent={};
+      function find(x){ if(!(x in parent))parent[x]=x; while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];} return x; }
+      function union(a,b){ const ra=find(a),rb=find(b); if(ra!==rb)parent[ra]=rb; }
+      fichas.forEach((f,i)=>{
+        const kRow="r:"+i; find(kRow);
+        if(f.phone){ union(kRow,"p:"+f.phone); }
+        if(f.email){ union(kRow,"e:"+f.email); }
+      });
+      const groups={};
+      fichas.forEach((f,i)=>{
+        const root=find("r:"+i);
+        if(!groups[root]||f.ms<groups[root].ms) groups[root]=f;
+      });
+      return Object.values(groups);
+    }
+    const fichaOrigemUnica=dedupFichas(fichaOrigem);
 
     // ── Vendas → casar com tráfego ou orgânico via e-mail/telefone ──
     // Uma venda é atribuída à ficha (tráfego ou orgânico) que a pessoa preencheu
@@ -599,7 +628,7 @@ async function loadData(){
 
     S.trafego=trafD; S.trafegoComPreco=trafDComPreco; S.organico=orgD;
     S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib; S.vendaAttrib=vendaAttrib;
-    S.fichaOrigem=fichaOrigem; S.vendaOrigem=vendaOrigem;
+    S.fichaOrigem=fichaOrigem; S.fichaOrigemUnica=fichaOrigemUnica; S.vendaOrigem=vendaOrigem;
     S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched; S.vendasFaturamento=vFaturamento;
 
     const allDates=[...new Set([...Object.keys(mD),...Object.keys(trafD),...Object.keys(orgD)])].sort();
@@ -767,9 +796,10 @@ function canalKey(origem,canal){
   if(origem==="instagram")return `${origem}-${canal||"(não informado)"}`;
   return origem||"(não informado)";
 }
-function getOrigemRows(start,end,qual){
+// fichas: S.fichaOrigem (totais) ou S.fichaOrigemUnica (deduplicadas) — conforme S.fichasMode.
+function getOrigemRows(fichas,start,end,qual){
   const byFichas={}, byVendas={};
-  for(const f of S.fichaOrigem){
+  for(const f of fichas){
     if(f.date<start||f.date>end)continue;
     if(!passQual(f.tipo,qual))continue;
     const o=normOrigem(f.origem);
@@ -784,17 +814,17 @@ function getOrigemRows(start,end,qual){
   const origens=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
   const totalFichas=Object.values(byFichas).reduce((a,b)=>a+b,0);
   return [...origens].map(o=>{
-    const fichas=byFichas[o]||0, vendas=byVendas[o]||0;
-    return {origem:o,fichas,vendas,conv:fichas>0?(vendas/fichas)*100:0,
-      repres:totalFichas>0?(fichas/totalFichas)*100:0};
+    const fichas2=byFichas[o]||0, vendas=byVendas[o]||0;
+    return {origem:o,fichas:fichas2,vendas,conv:fichas2>0?(vendas/fichas2)*100:0,
+      repres:totalFichas>0?(fichas2/totalFichas)*100:0};
   });
 }
 // selectedOrigens: Set de labels JÁ TRADUZIDOS (os que aparecem clicáveis na tabela de
 // Origem) — quando preenchido, restringe o canal só às fichas/vendas daquela(s) origem(ns).
-function getCanalRows(start,end,qual,selectedOrigens){
+function getCanalRows(fichas,start,end,qual,selectedOrigens){
   const hasSel=selectedOrigens&&selectedOrigens.size>0;
   const byFichas={}, byVendas={};
-  for(const f of S.fichaOrigem){
+  for(const f of fichas){
     if(f.date<start||f.date>end)continue;
     if(!passQual(f.tipo,qual))continue;
     if(hasSel&&!selectedOrigens.has(normOrigem(f.origem)))continue;
@@ -810,9 +840,24 @@ function getCanalRows(start,end,qual,selectedOrigens){
   }
   const canais=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
   return [...canais].map(c=>{
-    const fichas=byFichas[c]||0, vendas=byVendas[c]||0;
-    return {canal:c,fichas,vendas,conv:fichas>0?(vendas/fichas)*100:0};
+    const fichas2=byFichas[c]||0, vendas=byVendas[c]||0;
+    return {canal:c,fichas:fichas2,vendas,conv:fichas2>0?(vendas/fichas2)*100:0};
   });
+}
+// Fichas reais por dia, filtradas pela(s) origem(ns)/canal(is) selecionado(s) na aba Fichas
+// (sem seleção nenhuma = total geral). Usado no gráfico "Fichas por dia".
+function getFichasPorDia(fichas,start,end,qual,selectedOrigens,selectedCanais){
+  const hasOrigemSel=selectedOrigens&&selectedOrigens.size>0;
+  const hasCanalSel=selectedCanais&&selectedCanais.size>0;
+  const byDate={};
+  for(const f of fichas){
+    if(f.date<start||f.date>end)continue;
+    if(!passQual(f.tipo,qual))continue;
+    if(hasOrigemSel&&!selectedOrigens.has(normOrigem(f.origem)))continue;
+    if(hasCanalSel&&!selectedCanais.has(canalKey(f.origem,f.canal)))continue;
+    byDate[f.date]=(byDate[f.date]||0)+1;
+  }
+  return Object.keys(byDate).sort().map(d=>({date:d,label:fDate(d),fichas:byDate[d]}));
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────
@@ -860,11 +905,18 @@ function sortAnuncios(col){
 
 // ── Cross-filtering: aba Fichas (Origem / Canal) ───────────────────────────
 function setFichasQual(q){ S.fichasQual=q; renderFichas(); }
+function setFichasMode(v){ S.fichasMode=v; renderFichas(); }
 function toggleOrigem(name){
   if(S.selectedOrigens.has(name))S.selectedOrigens.delete(name);else S.selectedOrigens.add(name);
+  S.selectedCanais.clear(); // canal muda de lista quando a origem muda — limpa seleção antiga
   renderFichas();
 }
-function clearOrigens(){S.selectedOrigens.clear();renderFichas();}
+function clearOrigens(){S.selectedOrigens.clear();S.selectedCanais.clear();renderFichas();}
+function toggleCanal(name){
+  if(S.selectedCanais.has(name))S.selectedCanais.delete(name);else S.selectedCanais.add(name);
+  renderFichas();
+}
+function clearCanais(){S.selectedCanais.clear();renderFichas();}
 function setOrigemSearch(v){S.origemSearch=v;renderFichas();}
 function setCanalSearch(v){S.canalSearch=v;renderFichas();}
 function sortOrigens(col){
@@ -1151,8 +1203,12 @@ function renderFichas(){
   const per=getCurrentPeriod();
   const escName=s=>String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'");
   const qual=S.fichasQual;
+  // "Totais" = toda ficha preenchida conta. "Únicas" = deduplicadas por telefone/e-mail,
+  // mantendo só a primeira ficha de cada pessoa (evita contar a mesma pessoa 2x quando
+  // ela preenche em canais diferentes).
+  const fichasSrc=S.fichasMode==="unicas"?S.fichaOrigemUnica:S.fichaOrigem;
 
-  const origemRowsAll=getOrigemRows(start,end,qual);
+  const origemRowsAll=getOrigemRows(fichasSrc,start,end,qual);
   const _oq=S.origemSearch.trim().toLowerCase();
   const origemRows=_oq?origemRowsAll.filter(o=>o.origem.toLowerCase().includes(_oq)):origemRowsAll;
   const {col:oCol,dir:oDir}=S.oSort;
@@ -1162,7 +1218,7 @@ function renderFichas(){
     return oDir==="asc"?av-bv:bv-av;
   });
 
-  const canalRowsAll=getCanalRows(start,end,qual,S.selectedOrigens);
+  const canalRowsAll=getCanalRows(fichasSrc,start,end,qual,S.selectedOrigens);
   const _mq=S.canalSearch.trim().toLowerCase();
   const canalRows=_mq?canalRowsAll.filter(c=>c.canal.toLowerCase().includes(_mq)):canalRowsAll;
   const {col:mCol,dir:mDir}=S.mSort;
@@ -1174,6 +1230,12 @@ function renderFichas(){
 
   const tot=origemRowsAll.reduce((a,o)=>({fichas:a.fichas+o.fichas,vendas:a.vendas+o.vendas}),{fichas:0,vendas:0});
   const totConv=tot.fichas>0?(tot.vendas/tot.fichas)*100:0;
+
+  // Gráfico "Fichas por dia" — mostra só a(s) origem(ns)/canal(is) selecionado(s), ou o
+  // total geral quando nada está selecionado.
+  const fichasPorDia=getFichasPorDia(fichasSrc,start,end,qual,S.selectedOrigens,S.selectedCanais);
+  const chartSelParts=[...S.selectedOrigens,...S.selectedCanais];
+  const chartTitle=chartSelParts.length>0?chartSelParts.join(", "):"Total";
 
   function thO(colKey,lbl){
     const active=oCol===colKey;
@@ -1194,6 +1256,15 @@ function renderFichas(){
       </div>
     </div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--hint)">Fichas:</span>
+      <div class="presets">
+        <button class="btn-pre${S.fichasMode==="totais"?" on":""}" onclick="setFichasMode('totais')">Totais</button>
+        <button class="btn-pre${S.fichasMode==="unicas"?" on":""}" onclick="setFichasMode('unicas')">Únicas</button>
+      </div>
+      <span style="font-size:10px;color:var(--hint)">${S.fichasMode==="unicas"?"deduplicadas por telefone/e-mail — considera só a 1ª ficha de cada pessoa":"toda ficha preenchida conta, mesmo repetida"}</span>
+    </div>
 
     <div class="g3" style="margin-bottom:20px">
       ${kpiCard("Fichas",tot.fichas.toLocaleString("pt-BR"),"","var(--text-strong)")}
@@ -1249,25 +1320,29 @@ function renderFichas(){
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
       <div class="section-lbl" style="margin-bottom:0">Canal da ficha${S.selectedOrigens.size>0?` — dentro de: ${[...S.selectedOrigens].join(", ")}`:" — consolidado (todas as origens)"}</div>
-      <span style="font-size:10px;color:var(--hint)">Clique em uma origem acima para filtrar</span>
+      ${S.selectedCanais.size>0?`<button onclick="clearCanais()" style="font-size:10px;padding:3px 9px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#f87171;border-radius:5px;cursor:pointer;font-family:'DM Sans',sans-serif">✕ Limpar seleção (${S.selectedCanais.size})</button>`:""}
+      <span style="font-size:10px;color:var(--hint)">Clique em uma origem acima para filtrar · clique num canal para focar o gráfico</span>
     </div>
     <div style="position:relative;margin-bottom:10px">
       <input oninput="setCanalSearch(this.value)" value="${S.canalSearch}" placeholder="Buscar canal…" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none;box-sizing:border-box"/>
     </div>
-    <div class="cc" style="padding:0;overflow:hidden">
+    <div class="cc" style="padding:0;overflow:hidden;margin-bottom:22px">
       <div style="overflow-x:auto">
       <table>
         <thead><tr>
+          <th style="width:36px"></th>
           <th onclick="sortCanais('canal')" style="cursor:pointer">Canal</th>
           ${thM("fichas","Quantidade de fichas")}
           ${thM("vendas","Quantidade de vendas")}
           ${thM("conv","Conv. ficha→venda")}
         </tr></thead>
         <tbody>
-          ${sortedCanais.length===0?`<tr><td colspan="4" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
+          ${sortedCanais.length===0?`<tr><td colspan="5" style="text-align:center;color:var(--hint);padding:20px">Sem fichas no período selecionado</td></tr>`:
           sortedCanais.map(c=>{
-            return `<tr>
-              <td style="color:var(--text)">${c.canal}</td>
+            const sel=S.selectedCanais.has(c.canal);
+            return `<tr onclick="toggleCanal('${escName(c.canal)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
+              <td style="text-align:center">${chkBox(sel)}</td>
+              <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${c.canal}</td>
               <td class="mono" style="text-align:right">${c.fichas.toLocaleString("pt-BR")}</td>
               <td class="mono" style="text-align:right">${c.vendas.toLocaleString("pt-BR")}</td>
               <td class="mono" style="text-align:right">${c.fichas>0?fPct(c.conv):"—"}</td>
@@ -1277,7 +1352,20 @@ function renderFichas(){
       </table>
       </div>
     </div>
+
+    <div class="cc" style="position:relative">
+      <div class="ch">
+        <span class="ct">Fichas por dia — ${chartTitle}</span>
+        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_TRAF}"></span>Fichas/dia</span></div>
+      </div>
+      <div style="position:relative"><canvas id="c-fichas-dia"></canvas><div class="tip" id="t-fichas-dia"></div></div>
+    </div>
     <div class="foot">ORO · Carrinho · conectado ao Google Sheets</div>`;
+  requestAnimationFrame(()=>{
+    const box=document.getElementById("c-fichas-dia")?.parentElement;
+    if(box)drawBarSingle("c-fichas-dia",fichasPorDia,"fichas",CHART_TRAF,box.clientWidth,220);
+    setupTip("c-fichas-dia","t-fichas-dia",fichasPorDia,[{name:"Fichas",color:CHART_TRAF,key:"fichas",fmt:v=>String(v)}],40,12);
+  });
 }
 
 // ── Render: Campanhas / Anúncios ──────────────────────────────────────────
