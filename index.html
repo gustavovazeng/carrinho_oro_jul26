@@ -1676,11 +1676,14 @@ function renderResumo(){
   const ct=cplInfo(tot), co=cplInfo(ontem), ch_=cplInfo(hoje,true);
   function textBlock(label,m,dateLbl,c){
     return `${label}${dateLbl?`\t${dateLbl}`:""}
+
 Investimento:\t${fBRL(m.spend)}
 Fichas com preço:\t${m.trafComPreco}
 Custo/ ficha com preço:\t${c.txt}\t${c.emoji} (meta: ${fBRL(META_CPL)})
+
 Fichas totais:\t${m.traf}
 Custo/ficha total:\t${m.traf>0?fBRL(m.cplTotal):"—"}
+
 CPC:\t${fBRL(m.cpc)}
 CTR:\t${fPct(m.ctr)}
 CPM:\t${fBRL(m.cpm)}
