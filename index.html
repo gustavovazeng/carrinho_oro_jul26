@@ -536,10 +536,10 @@ async function loadData(){
     const fichaAttrib=[];
     const fichaOrigem=[]; // TODAS as fichas (tráfego+orgânico) com origem/canal: {date,ms,tipo,origem,canal,phone,email,comPreco}
     const earliestByPhone={}, earliestByEmail={};
-    function noteFicha(type,phone,email,ms,adName,campName,origem,canal){
+    function noteFicha(type,phone,email,ms,adName,campName,origem,canal,comPreco){
       if(ms==null)return;
       const iso=msToISO(ms-3*60*60*1000); // mesmo ajuste de fuso usado nas fichas (toISOFicha)
-      const rec={type,ms,iso,adName:adName||null,campName:campName||null,origem:origem||null,canal:canal||null};
+      const rec={type,ms,iso,adName:adName||null,campName:campName||null,origem:origem||null,canal:canal||null,comPreco:!!comPreco};
       if(phone&&(!earliestByPhone[phone]||ms<earliestByPhone[phone].ms))earliestByPhone[phone]=rec;
       if(email&&(!earliestByEmail[email]||ms<earliestByEmail[email].ms))earliestByEmail[email]=rec;
     }
@@ -567,7 +567,7 @@ async function loadData(){
         campName=adIdMap[rawAdId].campName||rawCampName;
       }
       const trafPhone=normalizePhone(r["Qual seu WhatsApp?"]), trafEmail=normalizeEmail(r["Qual seu e-mail?"]);
-      noteFicha("traf",trafPhone,trafEmail,ms,adName,campName,utmSrc,utmMed);
+      noteFicha("traf",trafPhone,trafEmail,ms,adName,campName,utmSrc,utmMed,comPreco);
       // Campanhas/Anúncios só conta ficha "com preço" (respondeu a pergunta de valor) —
       // fichas "sem preço" são envios incompletos e não entram no fichaAttrib.
       if(d&&comPreco&&(adName||campName)){
@@ -580,7 +580,7 @@ async function loadData(){
       const utmSrc=(r["utm_source"]||"").trim();
       const utmMed=(r["utm_medium"]||"").trim();
       const orgPhone=normalizePhone(r["Qual seu WhatsApp?"]), orgEmail=normalizeEmail(r["Qual seu e-mail?"]);
-      noteFicha("org",orgPhone,orgEmail,orgMs,null,null,utmSrc,utmMed);
+      noteFicha("org",orgPhone,orgEmail,orgMs,null,null,utmSrc,utmMed,orgComPreco);
       if(d)fichaOrigem.push({date:d,ms:orgMs,tipo:"org",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:orgPhone,email:orgEmail,comPreco:orgComPreco});
     }
 
@@ -622,7 +622,7 @@ async function loadData(){
     const vTrafD={}, vOrgD={};
     let vTotal=0, vUnmatched=0, vFaturamento=0;
     const vendaAttrib=[];
-    const vendaOrigem=[]; // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor}
+    const vendaOrigem=[]; // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor,comPreco}
     for(const r of vendasRows){
       const nome=(r["Nome"]||"").trim();
       const ph=normalizePhone(r["Telefone"]);
@@ -643,7 +643,7 @@ async function loadData(){
         }else{
           vOrgD[best.iso]=(vOrgD[best.iso]||0)+1;
         }
-        vendaOrigem.push({date:best.iso,tipo:best.type,origem:best.origem||"(não informado)",canal:best.canal||"(não informado)",valor});
+        vendaOrigem.push({date:best.iso,tipo:best.type,origem:best.origem||"(não informado)",canal:best.canal||"(não informado)",valor,comPreco:best.comPreco});
       }else{
         vUnmatched++;
       }
@@ -822,7 +822,9 @@ function canalKey(origem,canal){
   return origem||"(não informado)";
 }
 // fichas: S.fichaOrigem (totais) ou S.fichaOrigemUnica (deduplicadas) — conforme S.fichasMode.
-function getOrigemRows(fichas,start,end,qual){
+// vendas: lista de vendas já filtrada pelo mesmo critério "com preço/sem preço/total" da
+// aba Fichas — pra Vendas/Conversão baterem com o que as outras colunas estão mostrando.
+function getOrigemRows(fichas,vendas,start,end,qual){
   const byFichas={}, byVendas={};
   for(const f of fichas){
     if(f.date<start||f.date>end)continue;
@@ -830,7 +832,7 @@ function getOrigemRows(fichas,start,end,qual){
     const o=normOrigem(f.origem);
     byFichas[o]=(byFichas[o]||0)+1;
   }
-  for(const v of S.vendaOrigem){
+  for(const v of vendas){
     if(v.date<start||v.date>end)continue;
     if(!passQual(v.tipo,qual))continue;
     const o=normOrigem(v.origem);
@@ -839,14 +841,14 @@ function getOrigemRows(fichas,start,end,qual){
   const origens=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
   const totalFichas=Object.values(byFichas).reduce((a,b)=>a+b,0);
   return [...origens].map(o=>{
-    const fichas2=byFichas[o]||0, vendas=byVendas[o]||0;
-    return {origem:o,fichas:fichas2,vendas,conv:fichas2>0?(vendas/fichas2)*100:0,
+    const fichas2=byFichas[o]||0, vendas2=byVendas[o]||0;
+    return {origem:o,fichas:fichas2,vendas:vendas2,conv:fichas2>0?(vendas2/fichas2)*100:0,
       repres:totalFichas>0?(fichas2/totalFichas)*100:0};
   });
 }
 // selectedOrigens: Set de labels JÁ TRADUZIDOS (os que aparecem clicáveis na tabela de
 // Origem) — quando preenchido, restringe o canal só às fichas/vendas daquela(s) origem(ns).
-function getCanalRows(fichas,start,end,qual,selectedOrigens){
+function getCanalRows(fichas,vendas,start,end,qual,selectedOrigens){
   const hasSel=selectedOrigens&&selectedOrigens.size>0;
   const byFichas={}, byVendas={};
   for(const f of fichas){
@@ -856,7 +858,7 @@ function getCanalRows(fichas,start,end,qual,selectedOrigens){
     const c=canalKey(f.origem,f.canal);
     byFichas[c]=(byFichas[c]||0)+1;
   }
-  for(const v of S.vendaOrigem){
+  for(const v of vendas){
     if(v.date<start||v.date>end)continue;
     if(!passQual(v.tipo,qual))continue;
     if(hasSel&&!selectedOrigens.has(normOrigem(v.origem)))continue;
@@ -865,8 +867,8 @@ function getCanalRows(fichas,start,end,qual,selectedOrigens){
   }
   const canais=new Set([...Object.keys(byFichas),...Object.keys(byVendas)]);
   return [...canais].map(c=>{
-    const fichas2=byFichas[c]||0, vendas=byVendas[c]||0;
-    return {canal:c,fichas:fichas2,vendas,conv:fichas2>0?(vendas/fichas2)*100:0};
+    const fichas2=byFichas[c]||0, vendas2=byVendas[c]||0;
+    return {canal:c,fichas:fichas2,vendas:vendas2,conv:fichas2>0?(vendas2/fichas2)*100:0};
   });
 }
 // Fichas reais por dia, filtradas pela(s) origem(ns)/canal(is) selecionado(s) na aba Fichas
@@ -1249,11 +1251,18 @@ function renderFichas(){
   // ela preenche em canais diferentes).
   let fichasSrc=S.fichasMode==="unicas"?S.fichaOrigemUnica:S.fichaOrigem;
   // Filtro adicional por "com preço" (respondeu a pergunta de valor) × "sem preço" ×
-  // total (sem filtro nenhum) — aplicado por cima do Totais/Únicas acima.
-  if(S.fichasPreco==="comPreco")fichasSrc=fichasSrc.filter(f=>f.comPreco);
-  else if(S.fichasPreco==="semPreco")fichasSrc=fichasSrc.filter(f=>!f.comPreco);
+  // total (sem filtro nenhum) — aplicado por cima do Totais/Únicas acima. As vendas
+  // seguem o MESMO filtro (pela ficha casada com a venda), pra bater com as outras colunas.
+  let vendasSrc=S.vendaOrigem;
+  if(S.fichasPreco==="comPreco"){
+    fichasSrc=fichasSrc.filter(f=>f.comPreco);
+    vendasSrc=vendasSrc.filter(v=>v.comPreco);
+  }else if(S.fichasPreco==="semPreco"){
+    fichasSrc=fichasSrc.filter(f=>!f.comPreco);
+    vendasSrc=vendasSrc.filter(v=>!v.comPreco);
+  }
 
-  const origemRowsAll=getOrigemRows(fichasSrc,start,end,qual);
+  const origemRowsAll=getOrigemRows(fichasSrc,vendasSrc,start,end,qual);
   const _oq=S.origemSearch.trim().toLowerCase();
   const origemRows=_oq?origemRowsAll.filter(o=>o.origem.toLowerCase().includes(_oq)):origemRowsAll;
   const {col:oCol,dir:oDir}=S.oSort;
@@ -1263,7 +1272,7 @@ function renderFichas(){
     return oDir==="asc"?av-bv:bv-av;
   });
 
-  const canalRowsAll=getCanalRows(fichasSrc,start,end,qual,S.selectedOrigens);
+  const canalRowsAll=getCanalRows(fichasSrc,vendasSrc,start,end,qual,S.selectedOrigens);
   const _mq=S.canalSearch.trim().toLowerCase();
   const canalRows=_mq?canalRowsAll.filter(c=>c.canal.toLowerCase().includes(_mq)):canalRowsAll;
   const {col:mCol,dir:mDir}=S.mSort;
@@ -1278,8 +1287,8 @@ function renderFichas(){
 
   // Volume de fichas duplicadas — sempre comparando totais × únicas no período (independe
   // do seletor "Totais/Únicas" acima, que só decide o que as tabelas/gráfico usam).
-  const totFichasAll=getOrigemRows(S.fichaOrigem,start,end,qual).reduce((a,o)=>a+o.fichas,0);
-  const totFichasUnicas=getOrigemRows(S.fichaOrigemUnica,start,end,qual).reduce((a,o)=>a+o.fichas,0);
+  const totFichasAll=getOrigemRows(S.fichaOrigem,S.vendaOrigem,start,end,qual).reduce((a,o)=>a+o.fichas,0);
+  const totFichasUnicas=getOrigemRows(S.fichaOrigemUnica,S.vendaOrigem,start,end,qual).reduce((a,o)=>a+o.fichas,0);
   const fichasDuplicadas=totFichasAll-totFichasUnicas;
   const pctDuplicadas=totFichasAll>0?(fichasDuplicadas/totFichasAll)*100:0;
 
