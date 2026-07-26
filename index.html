@@ -236,7 +236,7 @@ const S = {
   adIdMap:{},            // adId → {adName,campName,campId,igUrl} (fonte da verdade p/ casar fichas)
   fichaAttrib:[],        // fichas de tráfego casadas com anúncio/campanha: {date,adName,campName}
   vendaAttrib:[],        // vendas de tráfego casadas com anúncio/campanha: {date,adName,campName,valor}
-  fichaOrigem:[],        // todas as fichas (tráfego+orgânico) com origem/canal: {date,ms,tipo,origem,canal,phone,email}
+  fichaOrigem:[],        // todas as fichas (tráfego+orgânico) com origem/canal: {date,ms,tipo,origem,canal,phone,email,comPreco}
   fichaOrigemUnica:[],   // fichas deduplicadas por telefone/e-mail (só a mais antiga por pessoa)
   vendaOrigem:[],        // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor}
   trafego:{},            // date → count (fichas tráfego, totais: com+sem preço)
@@ -260,6 +260,7 @@ const S = {
   // aba Fichas
   fichasQual:"todas",     // 'todas' | 'traf' | 'org' — qualificação das fichas por fonte
   fichasMode:"totais",    // 'totais' | 'unicas' — fichas únicas deduplicadas por telefone/e-mail
+  fichasPreco:"total",    // 'total' | 'comPreco' | 'semPreco' — respondeu a pergunta de valor?
   selectedOrigens:new Set(),
   selectedCanais:new Set(),
   origemSearch:"", canalSearch:"",
@@ -512,7 +513,7 @@ async function loadData(){
     // orgânico) — usados tanto para casar vendas quanto (no caso do tráfego) pra
     // saber de qual anúncio/campanha essa ficha veio.
     const fichaAttrib=[];
-    const fichaOrigem=[]; // TODAS as fichas (tráfego+orgânico) com origem/canal: {date,ms,tipo,origem,canal,phone,email}
+    const fichaOrigem=[]; // TODAS as fichas (tráfego+orgânico) com origem/canal: {date,ms,tipo,origem,canal,phone,email,comPreco}
     const earliestByPhone={}, earliestByEmail={};
     function noteFicha(type,phone,email,ms,adName,campName,origem,canal){
       if(ms==null)return;
@@ -551,7 +552,7 @@ async function loadData(){
       if(d&&comPreco&&(adName||campName)){
         fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)"});
       }
-      if(d)fichaOrigem.push({date:d,ms,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:trafPhone,email:trafEmail});
+      if(d)fichaOrigem.push({date:d,ms,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:trafPhone,email:trafEmail,comPreco});
     }
     for(const r of orgRows){
       const d=toISOFicha(r["Submitted At"]);
@@ -559,8 +560,9 @@ async function loadData(){
       const utmSrc=(r["utm_source"]||"").trim();
       const utmMed=(r["utm_medium"]||"").trim();
       const orgPhone=normalizePhone(r["Qual seu WhatsApp?"]), orgEmail=normalizeEmail(r["Qual seu e-mail?"]);
+      const orgComPreco=temPreco(r); // mesmas colunas de valor/pagamento existem no form orgânico
       noteFicha("org",orgPhone,orgEmail,orgMs,null,null,utmSrc,utmMed);
-      if(d)fichaOrigem.push({date:d,ms:orgMs,tipo:"org",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:orgPhone,email:orgEmail});
+      if(d)fichaOrigem.push({date:d,ms:orgMs,tipo:"org",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:orgPhone,email:orgEmail,comPreco:orgComPreco});
     }
 
     // ── Fichas únicas: dedup por telefone OU e-mail (se qualquer um dos dois bater
@@ -908,6 +910,7 @@ function sortAnuncios(col){
 // ── Cross-filtering: aba Fichas (Origem / Canal) ───────────────────────────
 function setFichasQual(q){ S.fichasQual=q; renderFichas(); }
 function setFichasMode(v){ S.fichasMode=v; renderFichas(); }
+function setFichasPreco(v){ S.fichasPreco=v; renderFichas(); }
 function toggleOrigem(name){
   if(S.selectedOrigens.has(name))S.selectedOrigens.delete(name);else S.selectedOrigens.add(name);
   S.selectedCanais.clear(); // canal muda de lista quando a origem muda — limpa seleção antiga
@@ -1218,7 +1221,11 @@ function renderFichas(){
   // "Totais" = toda ficha preenchida conta. "Únicas" = deduplicadas por telefone/e-mail,
   // mantendo só a primeira ficha de cada pessoa (evita contar a mesma pessoa 2x quando
   // ela preenche em canais diferentes).
-  const fichasSrc=S.fichasMode==="unicas"?S.fichaOrigemUnica:S.fichaOrigem;
+  let fichasSrc=S.fichasMode==="unicas"?S.fichaOrigemUnica:S.fichaOrigem;
+  // Filtro adicional por "com preço" (respondeu a pergunta de valor) × "sem preço" ×
+  // total (sem filtro nenhum) — aplicado por cima do Totais/Únicas acima.
+  if(S.fichasPreco==="comPreco")fichasSrc=fichasSrc.filter(f=>f.comPreco);
+  else if(S.fichasPreco==="semPreco")fichasSrc=fichasSrc.filter(f=>!f.comPreco);
 
   const origemRowsAll=getOrigemRows(fichasSrc,start,end,qual);
   const _oq=S.origemSearch.trim().toLowerCase();
@@ -1283,6 +1290,16 @@ function renderFichas(){
         <button class="btn-pre${S.fichasMode==="unicas"?" on":""}" onclick="setFichasMode('unicas')">Únicas</button>
       </div>
       <span style="font-size:10px;color:var(--hint)">${S.fichasMode==="unicas"?"deduplicadas por telefone/e-mail — considera só a 1ª ficha de cada pessoa":"toda ficha preenchida conta, mesmo repetida"}</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--hint)">Tipo de ficha:</span>
+      <div class="presets">
+        <button class="btn-pre${S.fichasPreco==="total"?" on":""}" onclick="setFichasPreco('total')">Total</button>
+        <button class="btn-pre${S.fichasPreco==="comPreco"?" on":""}" onclick="setFichasPreco('comPreco')">Com preço</button>
+        <button class="btn-pre${S.fichasPreco==="semPreco"?" on":""}" onclick="setFichasPreco('semPreco')">Sem preço</button>
+      </div>
+      <span style="font-size:10px;color:var(--hint)">"com preço" = respondeu a pergunta de valor/pagamento</span>
     </div>
 
     <div class="g4" style="margin-bottom:20px">
