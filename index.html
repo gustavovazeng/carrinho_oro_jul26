@@ -430,19 +430,19 @@ async function loadData(){
     ]);
     const metaRowsRaw = parseSheet(metaJ);
     const trafRows    = parseSheet(trafJ);
-    // Disparos + Orgânico somados numa única categoria "orgânico"
-    const orgRows     = [...parseSheet(dispJ), ...parseSheet(orgJ)];
+    const dispRows    = parseSheet(dispJ);
+    const orgJRows    = parseSheet(orgJ);
     const vendasRows  = vendasJ ? parseSheet(vendasJ) : []; // zerado até termos o gid da aba de vendas
 
-    // ── Fichas de Tráfego: "com preço" × "totais" ──────────────────────────
-    // O formulário de tráfego tem duas perguntas de valor mutuamente exclusivas
-    // (quem responde uma não responde a outra — normal). Só que começaram a
-    // chegar fichas em que NENHUMA das duas foi respondida — envios incompletos
-    // que a automação sincroniza mesmo assim, sem "Submitted At" real (chega
-    // como 01/01/0001 00:00:00). A classificação "com preço"/"sem preço" é
-    // sempre feita pelas duas colunas de resposta (não pelo formato da data —
-    // isso está sendo corrigido na origem e "sem preço" vai continuar
-    // acontecendo mesmo com data válida no futuro).
+    // ── Fichas "com preço" × "sem preço" (Tráfego, Disparos e Orgânico) ────────
+    // As três abas têm duas perguntas de valor mutuamente exclusivas (quem responde
+    // uma não responde a outra — normal). Só que começaram a chegar fichas em que
+    // NENHUMA das duas foi respondida — envios incompletos que a automação
+    // sincroniza mesmo assim, sem "Submitted At" real (chega como 01/01/0001
+    // 00:00:00). Isso já apareceu no Tráfego e agora também em Disparos/Orgânico.
+    // A classificação "com preço"/"sem preço" é sempre feita pelas duas colunas de
+    // resposta (não pelo formato da data — isso está sendo corrigido na origem e
+    // "sem preço" vai continuar acontecendo mesmo com data válida no futuro).
     const trafHeaders=trafRows.length?Object.keys(trafRows[0]):[];
     const KEY_PRECO_2X=trafHeaders.find(h=>h.startsWith("O valor das duas assinaturas"));
     const KEY_PRECO_1X=trafHeaders.find(h=>h.startsWith("O valor da Aliança Divergente é de R$ 2.480"));
@@ -451,16 +451,34 @@ async function loadData(){
       return !!(KEY_PRECO_2X&&(r[KEY_PRECO_2X]||"").trim())||!!(KEY_PRECO_1X&&(r[KEY_PRECO_1X]||"").trim());
     }
     // Fichas "sem preço" não têm data confiável — herdam data/hora da ficha "com
-    // preço" anterior mais próxima (ordem da planilha = ordem de envio; se a de
-    // cima também for sem preço, sobe mais uma, e assim por diante).
-    let lastGoodMs=null;
-    const trafResolved=trafRows.map(r=>{
-      const comPreco=temPreco(r);
-      const rawMs=parseDateTimeMs(r["Submitted At"]);
-      const ms=comPreco?rawMs:lastGoodMs;
-      if(comPreco)lastGoodMs=rawMs;
-      return{r,comPreco,ms};
-    });
+    // preço" anterior mais próxima NA MESMA ABA (ordem da planilha = ordem de
+    // envio; se a de cima também for sem preço, sobe mais uma, e assim por
+    // diante). Aplicado separadamente em Tráfego, Disparos e Orgânico.
+    // IMPORTANTE: só vira "âncora" (lastGoodMs) uma linha "com preço" que TAMBÉM
+    // tenha uma data válida — algumas linhas vêm com colunas desalinhadas
+    // (texto longo sem aspas quebrando o CSV) e "parecem" ter preço respondido,
+    // mas com "Submitted At" vazio; se essa linha virasse âncora, ela zeraria a
+    // referência de data pra todo mundo depois dela, mesmo sem ter data nenhuma.
+    function resolveComBackfill(rows){
+      let lastGoodMs=null;
+      return rows.map(r=>{
+        const comPreco=temPreco(r);
+        const rawMs=parseDateTimeMs(r["Submitted At"]);
+        let ms;
+        if(comPreco&&rawMs!=null){
+          ms=rawMs;
+          lastGoodMs=rawMs;
+        }else{
+          ms=lastGoodMs; // sem preço, ou "com preço" mas com data ilegível — herda a última data boa
+        }
+        return{r,comPreco,ms};
+      });
+    }
+    const trafResolved=resolveComBackfill(trafRows);
+    const dispResolved=resolveComBackfill(dispRows);
+    const orgJResolved=resolveComBackfill(orgJRows);
+    // Disparos + Orgânico somados numa única categoria "orgânico"
+    const orgResolved=[...dispResolved,...orgJResolved];
     // ── Fichas: Tráfego (data já ajustada -3h) ──
     const trafD={}, trafDComPreco={};
     for(const{comPreco,ms} of trafResolved){
@@ -471,8 +489,9 @@ async function loadData(){
     }
     // ── Fichas: Orgânico (data já ajustada -3h) ──
     const orgD={};
-    for(const r of orgRows){
-      const d=toISOFicha(r["Submitted At"]);if(!d)continue;
+    for(const{ms} of orgResolved){
+      if(ms==null)continue;
+      const d=msToISO(ms-3*60*60*1000);
       orgD[d]=(orgD[d]||0)+1;
     }
 
@@ -554,13 +573,11 @@ async function loadData(){
       }
       if(d)fichaOrigem.push({date:d,ms,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:trafPhone,email:trafEmail,comPreco});
     }
-    for(const r of orgRows){
-      const d=toISOFicha(r["Submitted At"]);
-      const orgMs=parseDateTimeMs(r["Submitted At"]);
+    for(const{r,ms:orgMs,comPreco:orgComPreco} of orgResolved){
+      const d=orgMs!=null?msToISO(orgMs-3*60*60*1000):null;
       const utmSrc=(r["utm_source"]||"").trim();
       const utmMed=(r["utm_medium"]||"").trim();
       const orgPhone=normalizePhone(r["Qual seu WhatsApp?"]), orgEmail=normalizeEmail(r["Qual seu e-mail?"]);
-      const orgComPreco=temPreco(r); // mesmas colunas de valor/pagamento existem no form orgânico
       noteFicha("org",orgPhone,orgEmail,orgMs,null,null,utmSrc,utmMed);
       if(d)fichaOrigem.push({date:d,ms:orgMs,tipo:"org",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:orgPhone,email:orgEmail,comPreco:orgComPreco});
     }
