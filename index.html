@@ -241,7 +241,8 @@ const S = {
   vendaOrigem:[],        // vendas casadas (tráfego+orgânico) com origem/canal: {date,tipo,origem,canal,valor}
   trafego:{},            // date → count (fichas tráfego, totais: com+sem preço)
   trafegoComPreco:{},    // date → count (fichas tráfego que responderam alguma das perguntas de valor)
-  organico:{},           // date → count (fichas orgânico)
+  organico:{},           // date → count (fichas orgânico, totais: com+sem preço)
+  organicoComPreco:{},   // date → count (fichas orgânico que responderam alguma das perguntas de valor)
   vendasTraf:{},         // date → count (vendas casadas com fichas de tráfego)
   vendasOrg:{},          // date → count (vendas casadas com fichas de orgânico)
   vendasTotal:0, vendasUnmatched:0, vendasFaturamento:0,
@@ -488,11 +489,12 @@ async function loadData(){
       if(comPreco)trafDComPreco[d]=(trafDComPreco[d]||0)+1;
     }
     // ── Fichas: Orgânico (data já ajustada -3h) ──
-    const orgD={};
-    for(const{ms} of orgResolved){
+    const orgD={}, orgDComPreco={};
+    for(const{comPreco,ms} of orgResolved){
       if(ms==null)continue;
       const d=msToISO(ms-3*60*60*1000);
       orgD[d]=(orgD[d]||0)+1;
+      if(comPreco)orgDComPreco[d]=(orgDComPreco[d]||0)+1;
     }
 
     // ── Base Meta (investimento) ── guarda linhas planas + mapa Ad ID → anúncio/campanha
@@ -647,7 +649,7 @@ async function loadData(){
       }
     }
 
-    S.trafego=trafD; S.trafegoComPreco=trafDComPreco; S.organico=orgD;
+    S.trafego=trafD; S.trafegoComPreco=trafDComPreco; S.organico=orgD; S.organicoComPreco=orgDComPreco;
     S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib; S.vendaAttrib=vendaAttrib;
     S.fichaOrigem=fichaOrigem; S.fichaOrigemUnica=fichaOrigemUnica; S.vendaOrigem=vendaOrigem;
     S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched; S.vendasFaturamento=vFaturamento;
@@ -672,7 +674,8 @@ function getDaily(start,end){
     const traf=S.trafego[date]||0;
     const trafComPreco=S.trafegoComPreco[date]||0;
     const org=S.organico[date]||0;
-    return{date,label:fDate(date),spend:m.spend||0,trafficLeads:traf,trafficLeadsComPreco:trafComPreco,organicLeads:org,
+    const orgComPreco=S.organicoComPreco[date]||0;
+    return{date,label:fDate(date),spend:m.spend||0,trafficLeads:traf,trafficLeadsComPreco:trafComPreco,organicLeads:org,organicLeadsComPreco:orgComPreco,
       cpl:trafComPreco>0?(m.spend||0)/trafComPreco:0};
   });
 }
@@ -682,7 +685,8 @@ function getTotals(daily){
     trafficLeads:a.trafficLeads+d.trafficLeads,
     trafficLeadsComPreco:a.trafficLeadsComPreco+d.trafficLeadsComPreco,
     organicLeads:a.organicLeads+d.organicLeads,
-  }),{spend:0,trafficLeads:0,trafficLeadsComPreco:0,organicLeads:0});
+    organicLeadsComPreco:a.organicLeadsComPreco+d.organicLeadsComPreco,
+  }),{spend:0,trafficLeads:0,trafficLeadsComPreco:0,organicLeads:0,organicLeadsComPreco:0});
 }
 // s,e = null → todo o período (all-time)
 function periodTotals(s,e){
@@ -1168,13 +1172,18 @@ function renderPrincipal(){
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     <div class="g3" style="margin-bottom:13px">
       ${kpiCard("Investimento",fBRL(tot.spend),"","var(--text-strong)")}
+      ${kpiCard("Custo/ficha com preço",tot.trafficLeadsComPreco>0?fBRL(cpl):"—",`meta ${fBRL(META_CPL)}`,cplC,false,cpl,META_CPL,false)}
+      ${kpiCard("Custo/ficha total",tot.trafficLeads>0?fBRL(cplTotal):"—","","var(--text-strong)")}
+    </div>
+    <div class="g3" style="margin-bottom:13px">
       ${kpiCard("Fichas tráfego (com preço)",tot.trafficLeadsComPreco.toLocaleString("pt-BR"),"","var(--text-strong)")}
+      ${kpiCard("Fichas tráfego (sem preço)",(tot.trafficLeads-tot.trafficLeadsComPreco).toLocaleString("pt-BR"),"","var(--text-strong)")}
       ${kpiCard("Fichas tráfego (totais)",tot.trafficLeads.toLocaleString("pt-BR"),"","var(--text-strong)")}
     </div>
     <div class="g3" style="margin-bottom:16px">
-      ${kpiCard("Fichas orgânico",tot.organicLeads.toLocaleString("pt-BR"),"","var(--text-strong)")}
-      ${kpiCard("Custo/ficha com preço",tot.trafficLeadsComPreco>0?fBRL(cpl):"—",`meta ${fBRL(META_CPL)}`,cplC,false,cpl,META_CPL,false)}
-      ${kpiCard("Custo/ficha total",tot.trafficLeads>0?fBRL(cplTotal):"—","","var(--text-strong)")}
+      ${kpiCard("Fichas orgânico (com preço)",tot.organicLeadsComPreco.toLocaleString("pt-BR"),"","var(--text-strong)")}
+      ${kpiCard("Fichas orgânico (sem preço)",(tot.organicLeads-tot.organicLeadsComPreco).toLocaleString("pt-BR"),"","var(--text-strong)")}
+      ${kpiCard("Fichas orgânico (totais)",tot.organicLeads.toLocaleString("pt-BR"),"","var(--text-strong)")}
     </div>
     <div class="cc" style="margin-bottom:12px;position:relative">
       <div class="ch">
