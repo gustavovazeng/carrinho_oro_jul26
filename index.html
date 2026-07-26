@@ -364,22 +364,36 @@ function statusBorder(val,meta,higherIsBetter){
   return "var(--border)";
 }
 // ── CSV parser ────────────────────────────────────────────────────────────
+// Parser CSV "de verdade" (RFC4180): processa o texto inteiro caractere a caractere,
+// sem quebrar em linhas antes de saber se está dentro de aspas. Respostas de texto
+// livre do formulário frequentemente têm quebra de linha DENTRO de um campo entre
+// aspas — isso é CSV válido, o Google Sheets exporta assim. O parser antigo cortava
+// o texto por \n primeiro (text.split(/\r?\n/)) e só depois olhava as aspas, então
+// um campo multi-linha virava várias "linhas" quebradas, cada uma com as colunas
+// deslocadas — foi isso que fez pedaços de resposta de texto livre aparecerem como
+// se fossem "origem" (utm_source) na aba Fichas.
 function parseCSVText(text){
-  const lines=text.split(/\r?\n/);
   const result=[];
-  for(const line of lines){
-    if(!line.trim()) continue;
-    const row=[];let cur="";let inQ=false;
-    for(let i=0;i<line.length;i++){
-      const c=line[i];
-      if(c==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++;}else inQ=!inQ;}
-      else if(c===','&&!inQ){row.push(cur);cur="";}
-      else cur+=c;
+  let row=[],cur="",inQ=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(inQ){
+      if(c==='"'){
+        if(text[i+1]==='"'){cur+='"';i++;}
+        else inQ=false;
+      }else{
+        cur+=c;
+      }
+    }else{
+      if(c==='"'){inQ=true;}
+      else if(c===','){row.push(cur);cur="";}
+      else if(c==='\r'){/* ignora — o \n logo em seguida fecha a linha */}
+      else if(c==='\n'){row.push(cur);cur="";result.push(row);row=[];}
+      else{cur+=c;}
     }
-    row.push(cur);
-    result.push(row);
   }
-  return {values:result};
+  if(cur!==""||row.length>0){row.push(cur);result.push(row);}
+  return {values:result.filter(r=>!(r.length===1&&r[0]===""))};
 }
 function parseSheet(json){
   const rows=json.values||[];if(rows.length<2)return[];
