@@ -736,7 +736,8 @@ function getDaily(start,end){
     const org=S.organico[date]||0;
     const orgComPreco=S.organicoComPreco[date]||0;
     return{date,label:fDate(date),spend:m.spend||0,trafficLeads:traf,trafficLeadsComPreco:trafComPreco,organicLeads:org,organicLeadsComPreco:orgComPreco,
-      cpl:trafComPreco>0?(m.spend||0)/trafComPreco:0};
+      cpl:trafComPreco>0?(m.spend||0)/trafComPreco:0,
+      cplTotal:traf>0?(m.spend||0)/traf:0};
   });
 }
 function getTotals(daily){
@@ -1084,8 +1085,9 @@ function drawDualInvCpl(id,data,cssW,cssH){
   const cW=cssW-P.l-P.r,cH=cssH-P.t-P.b;
   const lVals=data.map(d=>d.spend||0);
   const rVals=data.map(d=>d.cpl||0);
+  const rValsTotal=data.map(d=>d.cplTotal||0);
   const lMax=Math.max(...lVals,0.01)*1.15;
-  const rMax=Math.max(...rVals,META_CPL,0.01)*1.4;
+  const rMax=Math.max(...rVals,...rValsTotal,META_CPL,0.01)*1.4;
   const xP=i=>P.l+(data.length>1?i/(data.length-1):0.5)*cW;
   const yPL=v=>P.t+cH-((v)/(lMax))*cH;
   const yPR=v=>P.t+cH-((v)/(rMax))*cH;
@@ -1107,6 +1109,7 @@ function drawDualInvCpl(id,data,cssW,cssH){
   drawCutoffMarker(ctx,xP,data,P,cH);
   drawLineArea(ctx,xP,yPL,lVals,CHART_INV,true);
   drawLineArea(ctx,xP,yPR,rVals,CHART_CPL,false);
+  drawLineArea(ctx,xP,yPR,rValsTotal,CHART_TRAF,false);
   const step=data.length>60?7:data.length>30?3:data.length>14?2:1;
   ctx.fillStyle=TICK_C;ctx.font="10px 'DM Mono',monospace";ctx.textAlign="center";ctx.setLineDash([]);
   data.forEach((d,i)=>{if(i%step===0)ctx.fillText(d.label,xP(i),P.t+cH+18);});
@@ -1282,7 +1285,8 @@ function renderPrincipal(){
         <span class="ct">Investimento × Custo por Ficha (tráfego)</span>
         <div class="lg">
           <span class="li"><span class="ll" style="background:${CHART_INV}"></span>Invest. (esq.)</span>
-          <span class="li"><span class="ll" style="background:${CHART_CPL}"></span>Custo/ficha (dir.)</span>
+          <span class="li"><span class="ll" style="background:${CHART_CPL}"></span>Custo/ficha com preço (dir.)</span>
+          <span class="li"><span class="ll" style="background:${CHART_TRAF}"></span>Custo/ficha total (dir.)</span>
           <span class="li"><span class="ll" style="background:${CHART_CPL};opacity:.4;border-top:1px dashed ${CHART_CPL}"></span>Meta R$${META_CPL}</span>
         </div>
       </div>
@@ -1322,7 +1326,8 @@ function renderPrincipal(){
     if(box3)drawBarSingle("c-org",daily,"organicLeads",CHART_ORG,box3.clientWidth,200);
     setupTip("c-dual","t-dual",daily,[
       {name:"Investimento",color:CHART_INV,key:"spend",fmt:fBRL},
-      {name:"Custo/ficha",color:CHART_CPL,key:"cpl",fmt:fBRL}]);
+      {name:"Custo/ficha com preço",color:CHART_CPL,key:"cpl",fmt:fBRL},
+      {name:"Custo/ficha total",color:CHART_TRAF,key:"cplTotal",fmt:fBRL}]);
     setupTip("c-traf-preco","t-traf-preco",daily,[{name:"Fichas com preço",color:CHART_TRAF,key:"trafficLeadsComPreco",fmt:v=>String(v)}],40,12);
     setupTip("c-traf","t-traf",daily,[{name:"Fichas tráfego",color:CHART_TRAF,key:"trafficLeads",fmt:v=>String(v)}],40,12);
     setupTip("c-org","t-org",daily,[{name:"Fichas orgânico",color:CHART_ORG,key:"organicLeads",fmt:v=>String(v)}],40,12);
