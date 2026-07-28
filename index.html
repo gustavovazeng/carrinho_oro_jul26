@@ -530,21 +530,30 @@ async function loadData(){
     const orgJResolved=resolveComBackfill(orgJRows);
     // Disparos + Orgânico somados numa única categoria "orgânico"
     const orgResolved=[...dispResolved,...orgJResolved];
+    // A pergunta de preço saiu do formulário em 27/07/2026 ~19h. A partir desse
+    // momento NENHUMA ficha responde mais preço — "comPreco" deixou de servir
+    // como sinal de "ficha completa" dali pra frente. Pra cálculos que usavam
+    // "com preço" como proxy de conclusão do formulário (ex: Tx conversão
+    // formulário), a partir do corte conta-se a ficha inteira (com ou sem
+    // preço); antes do corte, mantém a regra antiga (só conta com preço).
+    const CUTOFF_PRECO_MS=parseDateTimeMs("27/07/2026 19:00:00");
     // ── Fichas: Tráfego (data já ajustada -3h) ──
-    const trafD={}, trafDComPreco={};
+    const trafD={}, trafDComPreco={}, trafDConv={};
     for(const{comPreco,ms} of trafResolved){
       if(ms==null)continue;
       const d=msToISO(ms-3*60*60*1000);
       trafD[d]=(trafD[d]||0)+1;
       if(comPreco)trafDComPreco[d]=(trafDComPreco[d]||0)+1;
+      if(comPreco||(CUTOFF_PRECO_MS!=null&&ms>=CUTOFF_PRECO_MS))trafDConv[d]=(trafDConv[d]||0)+1;
     }
     // ── Fichas: Orgânico (data já ajustada -3h) ──
-    const orgD={}, orgDComPreco={};
+    const orgD={}, orgDComPreco={}, orgDConv={};
     for(const{comPreco,ms} of orgResolved){
       if(ms==null)continue;
       const d=msToISO(ms-3*60*60*1000);
       orgD[d]=(orgD[d]||0)+1;
       if(comPreco)orgDComPreco[d]=(orgDComPreco[d]||0)+1;
+      if(comPreco||(CUTOFF_PRECO_MS!=null&&ms>=CUTOFF_PRECO_MS))orgDConv[d]=(orgDConv[d]||0)+1;
     }
 
     // ── Base Meta (investimento) ── guarda linhas planas + mapa Ad ID → anúncio/campanha
@@ -699,7 +708,8 @@ async function loadData(){
       }
     }
 
-    S.trafego=trafD; S.trafegoComPreco=trafDComPreco; S.organico=orgD; S.organicoComPreco=orgDComPreco;
+    S.trafego=trafD; S.trafegoComPreco=trafDComPreco; S.trafegoConv=trafDConv;
+    S.organico=orgD; S.organicoComPreco=orgDComPreco; S.organicoConv=orgDConv;
     S.meta=mD; S.metaRows=metaRows; S.adIdMap=adIdMap; S.fichaAttrib=fichaAttrib; S.vendaAttrib=vendaAttrib;
     S.fichaOrigem=fichaOrigem; S.fichaOrigemUnica=fichaOrigemUnica; S.vendaOrigem=vendaOrigem;
     S.vendasTraf=vTrafD; S.vendasOrg=vOrgD; S.vendasTotal=vTotal; S.vendasUnmatched=vUnmatched; S.vendasFaturamento=vFaturamento;
@@ -741,12 +751,13 @@ function getTotals(daily){
 // s,e = null → todo o período (all-time)
 function periodTotals(s,e){
   const dates=new Set([...Object.keys(S.trafego),...Object.keys(S.organico),...Object.keys(S.meta)]);
-  let traf=0,trafComPreco=0,org=0,spend=0,clicks=0,impressions=0,landingViews=0;
+  let traf=0,trafComPreco=0,trafConv=0,org=0,spend=0,clicks=0,impressions=0,landingViews=0;
   for(const d of dates){
     if(s!==null&&d<s)continue;
     if(e!==null&&d>e)continue;
     traf+=S.trafego[d]||0;
     trafComPreco+=S.trafegoComPreco[d]||0;
+    trafConv+=(S.trafegoConv&&S.trafegoConv[d])||0;
     org+=S.organico[d]||0;
     const m=S.meta[d];
     if(m){ spend+=m.spend||0; clicks+=m.clicks||0; impressions+=m.impressions||0; landingViews+=m.landingViews||0; }
@@ -757,8 +768,11 @@ function periodTotals(s,e){
     cpc:clicks>0?spend/clicks:0,
     ctr:impressions>0?(clicks/impressions)*100:0,
     cpm:impressions>0?(spend/impressions)*1000:0,
-    // Tx conversão formulário = fichas com preço / page views da landing
-    txForm:landingViews>0?(trafComPreco/landingViews)*100:0};
+    // Tx conversão formulário = fichas / page views da landing. Usa "trafConv":
+    // com preço antes do corte de 27/07 ~19h (quando a pergunta ainda existia),
+    // ficha inteira (com+sem preço) a partir do corte, já que preço não é mais
+    // respondido por ninguém dali pra frente.
+    txForm:landingViews>0?(trafConv/landingViews)*100:0};
 }
 // ── Campanhas / Anúncios: agregação com cross-filtering ───────────────────
 function getMetaRowsInRange(start,end){
