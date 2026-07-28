@@ -209,6 +209,13 @@ input[type=date]::-webkit-calendar-picker-indicator{opacity:.4;cursor:pointer;fi
 // ── Meta de custo por ficha ────────────────────────────────────────────────
 const META_CPL = 45; // R$ 45 por ficha (tráfego)
 
+// A pergunta de preço saiu do formulário em 27/07/2026 ~19h — dali pra frente
+// não dá mais pra calcular "custo/ficha com preço" de verdade (quase não há
+// fichas com preço). Por pedido, esses dois valores ficam fixados manualmente
+// em vez de recalculados — usados no Resumo diário e na aba Principal.
+const CPL_FIXO_2707=159.64;       // Custo/ficha com preço (tráfego) — dia 27/07/2026
+const CPL_FIXO_CONSOLIDADO=84.59; // Custo/ficha com preço (tráfego) — qualquer outro período, sempre
+
 // Metas de mídia usadas no farol do Resumo diário (🟢 dentro / 🟡 até 10% fora / 🔴 mais de 10% fora)
 // CPC / CTR / CPM / Tx. formulário ainda sem meta definida para o oro_jul26 — ficam sem farol.
 const METAS_RESUMO = {
@@ -1253,8 +1260,12 @@ function renderPrincipal(){
   const el=document.getElementById("page-principal");if(!el)return;
   const daily=getDaily(S.startDate,S.endDate);
   const tot=getTotals(daily);
-  const cpl=tot.trafficLeadsComPreco>0?tot.spend/tot.trafficLeadsComPreco:0;
   const cplTotal=tot.trafficLeads>0?tot.spend/tot.trafficLeads:0;
+  // Preço saiu do formulário em 27/07/2026 ~19h — "custo/ficha com preço" deixou
+  // de ser calculável de verdade. Fixado manualmente: dia 27/07/2026 isolado usa
+  // um valor, qualquer outro período (o "consolidado") sempre usa o outro.
+  const isDia2707=S.startDate===CUTOFF_DATE_ISO&&S.endDate===CUTOFF_DATE_ISO;
+  const cpl=isDia2707?CPL_FIXO_2707:CPL_FIXO_CONSOLIDADO;
   const cplC=statusColor(cpl,META_CPL,false);
   el.innerHTML=`
     <div class="hdr" style="margin-bottom:6px">
@@ -1267,7 +1278,7 @@ function renderPrincipal(){
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     <div class="g3" style="margin-bottom:13px">
       ${kpiCard("Investimento",fBRL(tot.spend),"","var(--text-strong)")}
-      ${kpiCard("Custo/ficha com preço",tot.trafficLeadsComPreco>0?fBRL(cpl):"—",`meta ${fBRL(META_CPL)}`,cplC,false,cpl,META_CPL,false)}
+      ${kpiCard("Custo/ficha com preço",fBRL(cpl),`meta ${fBRL(META_CPL)}`,cplC,false,cpl,META_CPL,false)}
       ${kpiCard("Custo/ficha total",tot.trafficLeads>0?fBRL(cplTotal):"—","","var(--text-strong)")}
     </div>
     <div class="g3" style="margin-bottom:13px">
@@ -1866,8 +1877,6 @@ function renderResumo(){
   // não dá mais pra calcular "custo/ficha com preço" de verdade (quase não há
   // fichas com preço). Por pedido, o valor de 27/07/2026 e o do consolidado
   // ficam fixados manualmente em vez de recalculados.
-  const CPL_FIXO_2707=159.64;      // Custo/ficha com preço (tráfego) — 27/07/2026
-  const CPL_FIXO_CONSOLIDADO=84.59; // Custo/ficha com preço (tráfego) — Total/Consolidado, sempre
   function cplInfo(m,isHoje,fixedVal){
     if(fixedVal!=null){
       const ratio=META_CPL/fixedVal;
