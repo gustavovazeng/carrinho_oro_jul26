@@ -444,10 +444,44 @@ async function loadData(){
       GID_VENDAS!=null ? fetchSheet("Vendas",GID_VENDAS) : Promise.resolve(null),
     ]);
     const metaRowsRaw = parseSheet(metaJ);
-    const trafRows    = parseSheet(trafJ);
-    const dispRows    = parseSheet(dispJ);
-    const orgJRows    = parseSheet(orgJ);
     const vendasRows  = vendasJ ? parseSheet(vendasJ) : []; // zerado até termos o gid da aba de vendas
+
+    // ── Dedup por Token + descarte de fichas incompletas ────────────────────
+    // Desde que a pergunta de preço saiu do formulário (27/07 ~19h), o mesmo
+    // envio passou a gerar 2 linhas com o mesmo Token: uma com "Submitted At"
+    // certo e outra com data quebrada "01/01/0001 00:00:00". Regra: se o Token
+    // tem as duas, fica só a de data certa; se só existe a de data quebrada
+    // (sem par), fica ela mesma.
+    const DATA_QUEBRADA="01/01/0001 00:00:00";
+    function dedupByToken(rows){
+      const groups={}, semToken=[];
+      for(const r of rows){
+        const tok=(r["Token"]||"").trim();
+        if(!tok){semToken.push(r);continue;}
+        (groups[tok]=groups[tok]||[]).push(r);
+      }
+      const out=semToken.slice();
+      for(const tok in groups){
+        const g=groups[tok];
+        const validas=g.filter(r=>(r["Submitted At"]||"").trim()!==DATA_QUEBRADA);
+        if(validas.length)out.push(...validas);
+        else out.push(g[0]);
+      }
+      return out;
+    }
+    // Fichas sem a pergunta "Nós te resgatamos. E agora você tem a chance de
+    // resgatar alguém." respondida são envios incompletos — só passaram a
+    // aparecer depois que o preço saiu do formulário. Ignoradas totalmente.
+    function filtraIncompletas(rows){
+      if(!rows.length)return rows;
+      const key=Object.keys(rows[0]).find(k=>k.startsWith("Nós te resgatamos"));
+      if(!key)return rows;
+      return rows.filter(r=>(r[key]||"").trim());
+    }
+    function limpaFichas(rows){ return filtraIncompletas(dedupByToken(rows)); }
+    const trafRows = limpaFichas(parseSheet(trafJ));
+    const dispRows = limpaFichas(parseSheet(dispJ));
+    const orgJRows = limpaFichas(parseSheet(orgJ));
 
     // ── Fichas "com preço" × "sem preço" (Tráfego, Disparos e Orgânico) ────────
     // As três abas têm duas perguntas de valor mutuamente exclusivas (quem responde
