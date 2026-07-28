@@ -1832,7 +1832,7 @@ function renderResumo(){
   // Farol do Custo/ficha usa sempre "fichas com preço" (é a métrica que tem meta definida —
   // R$45). "Fichas totais" (com+sem preço) não tem farol/meta, é só informativo.
   function cplInfo(m,isHoje){
-    if(!m.trafComPreco) return {txt:isHoje?"--!":"--", emoji:"🔴"};
+    if(!m.trafComPreco) return {txt:"--", emoji:"🔴"};
     const ratio=META_CPL/m.cpl;
     let emoji="🔴";
     if(ratio>=1)emoji="🟢";else if(ratio>=0.85)emoji="🟡";
