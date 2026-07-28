@@ -1104,6 +1104,7 @@ function drawDualInvCpl(id,data,cssW,cssH){
   ctx.setLineDash([]);
   ctx.fillStyle=CHART_CPL;ctx.font="9px 'Inter',sans-serif";ctx.textAlign="left";
   ctx.fillText("Meta R$"+META_CPL,P.l+cW+4,mY-3);
+  drawCutoffMarker(ctx,xP,data,P,cH);
   drawLineArea(ctx,xP,yPL,lVals,CHART_INV,true);
   drawLineArea(ctx,xP,yPR,rVals,CHART_CPL,false);
   const step=data.length>60?7:data.length>30?3:data.length>14?2:1;
@@ -1111,6 +1112,29 @@ function drawDualInvCpl(id,data,cssW,cssH){
   data.forEach((d,i)=>{if(i%step===0)ctx.fillText(d.label,xP(i),P.t+cH+18);});
 }
 
+// Marcador do corte de preço: 27/07/2026 ~19h, quando a pergunta de valor/pagamento
+// saiu do formulário. Linha tracejada vertical + rótulos "Com preço" / "Sem preço"
+// em todo gráfico cujo eixo X cobra essa data. Se a data não estiver no período
+// exibido, não desenha nada.
+const CUTOFF_DATE_ISO="2026-07-27";
+function drawCutoffMarker(ctx,xP,data,P,cH){
+  const idx=data.findIndex(d=>d.date===CUTOFF_DATE_ISO);
+  if(idx<0)return;
+  const x=xP(idx);
+  ctx.save();
+  ctx.setLineDash([4,3]);
+  ctx.strokeStyle="#f87171";
+  ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.moveTo(x,P.t);ctx.lineTo(x,P.t+cH);ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font="8px 'DM Sans',sans-serif";
+  ctx.fillStyle="#f87171";
+  ctx.textAlign="right";
+  ctx.fillText("Com preço",x-5,P.t+9);
+  ctx.textAlign="left";
+  ctx.fillText("Sem preço",x+5,P.t+9);
+  ctx.restore();
+}
 function drawBars(ctx,xP,yP,yZero,vals,color,barW){
   vals.forEach((v,i)=>{
     const x=xP(i)-barW/2, y=Math.min(yP(v),yZero), h=Math.abs(yP(v)-yZero);
@@ -1137,6 +1161,7 @@ function drawBarSingle(id,data,key,color,cssW,cssH){
     ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="right";
     ctx.fillText(Math.round(maxV-(i/4)*maxV),P.l-4,y+3);
   }
+  drawCutoffMarker(ctx,xP,data,P,cH);
   drawBars(ctx,xP,yP,P.t+cH,vals,color,barW);
   const step=n>60?7:n>30?3:n>14?2:1;
   ctx.textAlign="center";
@@ -1168,6 +1193,7 @@ function drawBarPct(id,data,key,color,cssW,cssH){
     ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="right";
     ctx.fillText((maxV-(i/4)*maxV).toFixed(1)+"%",P.l-4,y+3);
   }
+  drawCutoffMarker(ctx,xP,data,P,cH);
   drawBars(ctx,xP,yP,P.t+cH,vals,color,barW);
   const step=n>60?7:n>30?3:n>14?2:1;
   ctx.textAlign="center";
@@ -1831,7 +1857,19 @@ function renderResumo(){
 
   // Farol do Custo/ficha usa sempre "fichas com preço" (é a métrica que tem meta definida —
   // R$45). "Fichas totais" (com+sem preço) não tem farol/meta, é só informativo.
-  function cplInfo(m,isHoje){
+  // A pergunta de preço saiu do formulário em 27/07/2026 ~19h — dali pra frente
+  // não dá mais pra calcular "custo/ficha com preço" de verdade (quase não há
+  // fichas com preço). Por pedido, o valor de 27/07/2026 e o do consolidado
+  // ficam fixados manualmente em vez de recalculados.
+  const CPL_FIXO_2707=159.64;      // Custo/ficha com preço (tráfego) — 27/07/2026
+  const CPL_FIXO_CONSOLIDADO=84.59; // Custo/ficha com preço (tráfego) — Total/Consolidado, sempre
+  function cplInfo(m,isHoje,fixedVal){
+    if(fixedVal!=null){
+      const ratio=META_CPL/fixedVal;
+      let emoji="🔴";
+      if(ratio>=1)emoji="🟢";else if(ratio>=0.85)emoji="🟡";
+      return {txt:fBRL(fixedVal),emoji};
+    }
     if(!m.trafComPreco) return {txt:"--", emoji:"🔴"};
     const ratio=META_CPL/m.cpl;
     let emoji="🔴";
@@ -1875,8 +1913,8 @@ function renderResumo(){
       </span>
     </div>`;
   }
-  function block(title,m,isHoje,dateLbl){
-    const c=cplInfo(m,isHoje);
+  function block(title,m,isHoje,dateLbl,fixedCpl){
+    const c=cplInfo(m,isHoje,fixedCpl);
     return `
     <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">
@@ -1897,7 +1935,9 @@ function renderResumo(){
     </div>`;
   }
 
-  const ct=cplInfo(tot), co=cplInfo(ontem), ch_=cplInfo(hoje,true);
+  const ct=cplInfo(tot,false,CPL_FIXO_CONSOLIDADO);
+  const co=cplInfo(ontem,false,yest===CUTOFF_DATE_ISO?CPL_FIXO_2707:null);
+  const ch_=cplInfo(hoje,true,today===CUTOFF_DATE_ISO?CPL_FIXO_2707:null);
   function textBlock(label,m,dateLbl,c){
     return `${label}${dateLbl?`\t${dateLbl}`:""}
 
@@ -1935,9 +1975,9 @@ ${textBlock("Hoje",hoje,fDateBR(today),ch_)}`;
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     <div style="display:grid;grid-template-columns:1fr 420px;gap:20px;align-items:start">
       <div>
-        ${block("📶 Total - Consolidado",tot,false,per.s&&per.e?`${fDateBR(per.s)} → ${fDateBR(per.e)}`:"")}
-        ${block("⬅️ Ontem",ontem,false,fDateBR(yest))}
-        ${block("⬇️ Hoje",hoje,true,fDateBR(today))}
+        ${block("📶 Total - Consolidado",tot,false,per.s&&per.e?`${fDateBR(per.s)} → ${fDateBR(per.e)}`:"",CPL_FIXO_CONSOLIDADO)}
+        ${block("⬅️ Ontem",ontem,false,fDateBR(yest),yest===CUTOFF_DATE_ISO?CPL_FIXO_2707:null)}
+        ${block("⬇️ Hoje",hoje,true,fDateBR(today),today===CUTOFF_DATE_ISO?CPL_FIXO_2707:null)}
       </div>
       <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;position:sticky;top:70px">
         <pre id="resumo-preview" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);white-space:pre-wrap;line-height:1.8;margin:0;user-select:all">${resumoText.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</pre>
