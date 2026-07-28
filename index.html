@@ -499,26 +499,28 @@ async function loadData(){
       if(!KEY_PRECO_2X&&!KEY_PRECO_1X)return true; // colunas não encontradas — não filtra nada
       return !!(KEY_PRECO_2X&&(r[KEY_PRECO_2X]||"").trim())||!!(KEY_PRECO_1X&&(r[KEY_PRECO_1X]||"").trim());
     }
-    // Fichas "sem preço" não têm data confiável — herdam data/hora da ficha "com
-    // preço" anterior mais próxima NA MESMA ABA (ordem da planilha = ordem de
-    // envio; se a de cima também for sem preço, sobe mais uma, e assim por
-    // diante). Aplicado separadamente em Tráfego, Disparos e Orgânico.
-    // IMPORTANTE: só vira "âncora" (lastGoodMs) uma linha "com preço" que TAMBÉM
-    // tenha uma data válida — algumas linhas vêm com colunas desalinhadas
-    // (texto longo sem aspas quebrando o CSV) e "parecem" ter preço respondido,
-    // mas com "Submitted At" vazio; se essa linha virasse âncora, ela zeraria a
-    // referência de data pra todo mundo depois dela, mesmo sem ter data nenhuma.
+    // Data de cada ficha = a própria "Submitted At" da linha, sempre que ela for
+    // válida (diferente de "01/01/0001 00:00:00"). Isso vale independente de ter
+    // preço respondido — desde que o preço saiu do formulário (27/07 ~19h), NENHUMA
+    // ficha mais responde a pergunta de valor, mas a data de envio continua vindo
+    // certa na esmagadora maioria delas. Usar "comPreco" pra decidir se a data é
+    // confiável (como era antes) travaria a data de todo mundo no último instante
+    // em que alguém respondeu preço — foi exatamente o bug que zerou "Hoje".
+    // Só herda a data da linha anterior (backfill) quando a própria linha não tem
+    // "Submitted At" válido (as poucas "órfãs" que sobraram do dedup por Token,
+    // sem par de data certa).
     function resolveComBackfill(rows){
       let lastGoodMs=null;
       return rows.map(r=>{
         const comPreco=temPreco(r);
-        const rawMs=parseDateTimeMs(r["Submitted At"]);
+        const subAt=(r["Submitted At"]||"").trim();
+        const rawMs=(subAt&&subAt!==DATA_QUEBRADA)?parseDateTimeMs(subAt):null;
         let ms;
-        if(comPreco&&rawMs!=null){
+        if(rawMs!=null){
           ms=rawMs;
           lastGoodMs=rawMs;
         }else{
-          ms=lastGoodMs; // sem preço, ou "com preço" mas com data ilegível — herda a última data boa
+          ms=lastGoodMs; // sem data própria válida — herda a última data boa
         }
         return{r,comPreco,ms};
       });
