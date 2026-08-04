@@ -476,14 +476,24 @@ async function loadData(){
       }
       return out;
     }
-    // Fichas sem a pergunta "Nós te resgatamos. E agora você tem a chance de
-    // resgatar alguém." respondida são envios incompletos — só passaram a
-    // aparecer depois que o preço saiu do formulário. Ignoradas totalmente.
+    // "Nós te resgatamos. E agora você tem a chance de resgatar alguém." também
+    // saiu do formulário (a partir de ~03/08/2026) — igual aconteceu com o preço
+    // em 27/07. Ficha com "Submitted At" válido é sempre um envio real e NUNCA é
+    // descartada por esse campo, respondido ou não (foi exatamente esse filtro,
+    // aplicado a todo mundo, que zerou a contagem de fichas novas a partir de
+    // 03-04/08). O filtro só vale pra decidir as "órfãs" do dedup por Token
+    // (Submitted At quebrado "01/01/0001", sem par de data válida) — pra essas
+    // não dá pra saber a data real nem se é envio genuíno, então só entram se
+    // tiverem respondido essa pergunta (sinal de que não é lixo de automação).
     function filtraIncompletas(rows){
       if(!rows.length)return rows;
       const key=Object.keys(rows[0]).find(k=>k.startsWith("Nós te resgatamos"));
       if(!key)return rows;
-      return rows.filter(r=>(r[key]||"").trim());
+      return rows.filter(r=>{
+        const dataValida=(r["Submitted At"]||"").trim()!==DATA_QUEBRADA;
+        if(dataValida)return true;
+        return !!(r[key]||"").trim();
+      });
     }
     function limpaFichas(rows){ return filtraIncompletas(dedupByToken(rows)); }
     const trafRows = limpaFichas(parseSheet(trafJ));
@@ -634,10 +644,11 @@ async function loadData(){
       }
       const trafPhone=normalizePhone(r["Qual seu WhatsApp?"]), trafEmail=normalizeEmail(r["Qual seu e-mail?"]);
       noteFicha("traf",trafPhone,trafEmail,ms,adName,campName,utmSrc,utmMed,comPreco);
-      // Campanhas/Anúncios só conta ficha "com preço" (respondeu a pergunta de valor) —
-      // fichas "sem preço" são envios incompletos e não entram no fichaAttrib.
-      if(d&&comPreco&&(adName||campName)){
-        fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)"});
+      // Campanhas/Anúncios: guarda TODA ficha atribuída a anúncio/campanha, com a
+      // flag comPreco — "Fichas com preço"/"Custo/ficha com preço" filtram por ela,
+      // "Fichas totais"/"Custo/ficha total" contam todas (com+sem preço).
+      if(d&&(adName||campName)){
+        fichaAttrib.push({date:d,adName:adName||"(sem anúncio)",campName:campName||"(sem campanha)",comPreco:!!comPreco});
       }
       if(d)fichaOrigem.push({date:d,ms,tipo:"traf",origem:utmSrc||"(não informado)",canal:utmMed||"(não informado)",phone:trafPhone,email:trafEmail,comPreco});
     }
@@ -786,18 +797,26 @@ function periodTotals(s,e){
 function getMetaRowsInRange(start,end){
   return S.metaRows.filter(r=>r.date>=start&&r.date<=end);
 }
-function getFichasForCamp(start,end,campName){
+// onlyComPreco=true (padrão) → só conta ficha que respondeu preço ("com preço").
+// onlyComPreco=false → conta toda ficha atribuída (com+sem preço) — "totais".
+function getFichasForCamp(start,end,campName,onlyComPreco=true){
   let n=0;
-  for(const f of S.fichaAttrib){ if(f.date>=start&&f.date<=end&&f.campName===campName)n++; }
+  for(const f of S.fichaAttrib){
+    if(f.date<start||f.date>end)continue;
+    if(f.campName!==campName)continue;
+    if(onlyComPreco&&!f.comPreco)continue;
+    n++;
+  }
   return n;
 }
 // campFilter: Set de nomes de campanha (ou null/vazio = não filtra, soma todas as campanhas do anúncio)
-function getFichasForAd(start,end,adName,campFilter){
+function getFichasForAd(start,end,adName,campFilter,onlyComPreco=true){
   let n=0;
   for(const f of S.fichaAttrib){
     if(f.date<start||f.date>end)continue;
     if(f.adName!==adName)continue;
     if(campFilter&&campFilter.size>0&&!campFilter.has(f.campName))continue;
+    if(onlyComPreco&&!f.comPreco)continue;
     n++;
   }
   return n;
@@ -827,11 +846,13 @@ function getCampRows(start,end){
     byCamp[cn].videoViews+=r.videoViews;byCamp[cn].video75+=r.video75;
   }
   return Object.values(byCamp).map(c=>{
-    const leads=getFichasForCamp(start,end,c.campName);
+    const leads=getFichasForCamp(start,end,c.campName,true);
+    const leadsTotal=getFichasForCamp(start,end,c.campName,false);
     const {n:vendas,valor:valorVendas}=getVendasForCamp(start,end,c.campName);
-    return {...c,leads,vendas,valorVendas,
+    return {...c,leads,leadsTotal,vendas,valorVendas,
       cpc:c.clicks>0?c.spend/c.clicks:0, ctr:c.impressions>0?(c.clicks/c.impressions)*100:0,
       cpm:c.impressions>0?(c.spend/c.impressions)*1000:0, cpl:leads>0?c.spend/leads:0,
+      cplTotal:leadsTotal>0?c.spend/leadsTotal:0,
       roas:c.spend>0?valorVendas/c.spend:0,
       custoVenda:vendas>0?c.spend/vendas:0,
       convFichaVenda:leads>0?(vendas/leads)*100:0};
@@ -853,11 +874,13 @@ function getAdRows(start,end,selectedCamps){
     if(r.campName)byAd[an].camps.add(r.campName);
   }
   return Object.values(byAd).map(a=>{
-    const leads=getFichasForAd(start,end,a.adName,hasSel?selectedCamps:null);
+    const leads=getFichasForAd(start,end,a.adName,hasSel?selectedCamps:null,true);
+    const leadsTotal=getFichasForAd(start,end,a.adName,hasSel?selectedCamps:null,false);
     const {n:vendas,valor:valorVendas}=getVendasForAd(start,end,a.adName,hasSel?selectedCamps:null);
-    return {...a,leads,vendas,valorVendas,campNames:[...a.camps].join(", "),
+    return {...a,leads,leadsTotal,vendas,valorVendas,campNames:[...a.camps].join(", "),
       cpc:a.clicks>0?a.spend/a.clicks:0, ctr:a.impressions>0?(a.clicks/a.impressions)*100:0,
       cpm:a.impressions>0?(a.spend/a.impressions)*1000:0, cpl:leads>0?a.spend/leads:0,
+      cplTotal:leadsTotal>0?a.spend/leadsTotal:0,
       roas:a.spend>0?valorVendas/a.spend:0,
       custoVenda:vendas>0?a.spend/vendas:0,
       convFichaVenda:leads>0?(vendas/leads)*100:0};
@@ -1646,8 +1669,10 @@ function renderAnuncios(){
           <th style="width:36px"></th>
           <th onclick="sortCampanhas('campName')" style="cursor:pointer">Campanha</th>
           ${thC("spend","Investimento",true)}
-          ${thC("leads","Fichas",true)}
-          ${thC("cpl","Custo/ficha",true)}
+          ${thC("leads","Fichas com preço",true)}
+          ${thC("cpl","Custo/ficha com preço",true)}
+          ${thC("leadsTotal","Fichas totais",true)}
+          ${thC("cplTotal","Custo/ficha total",true)}
           ${thC("cpc","CPC",true)}
           ${thC("ctr","CTR",true)}
           ${thC("cpm","CPM",true)}
@@ -1656,7 +1681,7 @@ function renderAnuncios(){
           ${thC("convFichaVenda","Conv. ficha→venda",true)}
         </tr></thead>
         <tbody>
-          ${sortedCamps.length===0?`<tr><td colspan="11" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período (Base Meta ainda vazia)</td></tr>`:
+          ${sortedCamps.length===0?`<tr><td colspan="13" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período (Base Meta ainda vazia)</td></tr>`:
           sortedCamps.map(c=>{
             const sel=S.selectedCamps.has(c.campName);
             return `<tr onclick="toggleCamp('${escName(c.campName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
@@ -1665,6 +1690,8 @@ function renderAnuncios(){
               <td class="mono" style="text-align:right">${fBRL(c.spend)}</td>
               <td class="mono" style="text-align:right">${c.leads}</td>
               <td style="text-align:right;color:${c.cpl>0?statusColor(c.cpl,META_CPL,false):"var(--muted)"}">${c.cpl>0?fBRL(c.cpl):"—"}</td>
+              <td class="mono" style="text-align:right">${c.leadsTotal}</td>
+              <td class="mono" style="text-align:right">${c.cplTotal>0?fBRL(c.cplTotal):"—"}</td>
               <td class="mono" style="text-align:right">${c.cpc>0?fBRL(c.cpc):"—"}</td>
               <td class="mono" style="text-align:right">${fPct(c.ctr)}</td>
               <td class="mono" style="text-align:right">${fBRL(c.cpm)}</td>
@@ -1694,8 +1721,10 @@ function renderAnuncios(){
           <th onclick="sortAnuncios('adName')" style="cursor:pointer">Anúncio</th>
           <th>Campanha(s)</th>
           ${thC("spend","Investimento",false)}
-          ${thC("leads","Fichas",false)}
-          ${thC("cpl","Custo/ficha",false)}
+          ${thC("leads","Fichas com preço",false)}
+          ${thC("cpl","Custo/ficha com preço",false)}
+          ${thC("leadsTotal","Fichas totais",false)}
+          ${thC("cplTotal","Custo/ficha total",false)}
           ${thC("cpc","CPC",false)}
           ${thC("ctr","CTR",false)}
           ${thC("cpm","CPM",false)}
@@ -1705,7 +1734,7 @@ function renderAnuncios(){
           <th></th>
         </tr></thead>
         <tbody>
-          ${sortedAds.length===0?`<tr><td colspan="13" style="text-align:center;color:var(--hint);padding:20px">Sem dados de anúncios no período (Base Meta ainda vazia)</td></tr>`:
+          ${sortedAds.length===0?`<tr><td colspan="15" style="text-align:center;color:var(--hint);padding:20px">Sem dados de anúncios no período (Base Meta ainda vazia)</td></tr>`:
           sortedAds.map(a=>{
             const sel=S.selectedAds.has(a.adName);
             return `<tr onclick="toggleAd('${escName(a.adName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
@@ -1715,6 +1744,8 @@ function renderAnuncios(){
               <td class="mono" style="text-align:right">${fBRL(a.spend)}</td>
               <td class="mono" style="text-align:right">${a.leads}</td>
               <td style="text-align:right;color:${a.cpl>0?statusColor(a.cpl,META_CPL,false):"var(--muted)"}">${a.cpl>0?fBRL(a.cpl):"—"}</td>
+              <td class="mono" style="text-align:right">${a.leadsTotal}</td>
+              <td class="mono" style="text-align:right">${a.cplTotal>0?fBRL(a.cplTotal):"—"}</td>
               <td class="mono" style="text-align:right">${a.cpc>0?fBRL(a.cpc):"—"}</td>
               <td class="mono" style="text-align:right">${fPct(a.ctr)}</td>
               <td class="mono" style="text-align:right">${fBRL(a.cpm)}</td>
